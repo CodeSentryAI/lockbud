@@ -5,7 +5,5 @@ edition = "2021"
 description = "A thin wrapper around rustc_public StableMIR API"
 license = "BSD-3-Clause"
 
-[dependencies]
-
 [package.metadata.rust-analyzer]
 rustc_private = true

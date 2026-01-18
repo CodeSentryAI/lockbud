@@ -1,10 +1,11 @@
+[workspace]
+# This is an independent workspace
+
 [package]
 name = "static-ref"
 version = "0.1.0"
 authors = ["BurtonQin <bobbqqin@gmail.com>"]
 edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 lazy_static = "1.4.0"

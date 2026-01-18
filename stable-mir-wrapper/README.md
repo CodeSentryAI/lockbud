@@ -4,75 +4,90 @@ A thin wrapper library around Rust's StableMIR (Stable Mid-level Intermediate Re
 
 ## Overview
 
-This library provides a stable, owned, index-based representation of Rust's MIR that matches the `rustc_public` StableMIR API one-to-one. It serves as a temporary stable version until the official StableMIR API is stabilized in the Rust compiler.
+This library provides a stable interface to Rust's MIR by re-exporting types from `rustc_public` (the official StableMIR API). It serves as a temporary stable version until the official StableMIR API is stabilized and published to crates.io.
 
 ## Design Principles
 
-- **Index-based**: All types use opaque indices (usize) instead of references
-- **Owned data**: No lifetime parameters, all data is owned
-- **One-to-one mapping**: Matches `rustc_public` StableMIR API exactly
-- **Monomorphized only**: Only fully instantiated (monomorphic) MIR is exposed
+- **Thin wrapper**: Re-exports `rustc_public` types directly with no duplication
+- **Type aliases**: Provides convenient access to commonly used StableMIR types
+- **No modification**: Does not modify or reimplement StableMIR types
+- **Forward-compatible**: Will be easy to replace with the official StableMIR once published
 
-## Structure
+## What This Library Provides
 
-The library is organized into three main modules:
+The library re-exports the following from `rustc_public`:
 
-### `mir` - MIR Representation
-- `body` - Function body, basic blocks, local variables
-- `terminator` - Control flow terminators (return, call, switch, etc.)
-- `statement` - Non-terminating statements (assign, storage, etc.)
-- `rvalue` - Producing expressions (binary ops, casts, aggregates, etc.)
-- `operand` - Inputs to rvalues (copy, move, constant)
-- `place` - Memory locations (variables, fields, indices)
-- `mono` - Monomorphized items (instances, statics)
-- `visit` - Visitor trait for MIR traversal
+### MIR Types (`rustc_public::mir`)
+- `Body`, `BasicBlock`, `BasicBlockIdx`, `Local`, `RETURN_LOCAL`
+- `LocalDecl`, `VarDebugInfo`
+- `Terminator`, `TerminatorKind`
+- `Statement`, `StatementKind`
+- `Rvalue`, `Operand`, `ConstOperand`
+- `Place`, `ProjectionElem`, `FieldIdx`
 
-### `ty` - Type System
-- Type representations (`Ty`, `TyKind`, `RigidTy`)
-- Primitive types (integers, floats, bool, char)
-- Compound types (arrays, slices, tuples, ADTs)
-- Function types and signatures
-- Generic arguments and regions (lifetimes)
+### Monomorphization (`rustc_public::mir::mono`)
+- `Instance`, `MonoItem`, `StaticDef`
 
-### `crate_def` - Crate Definitions
-- Function, closure, coroutine definitions
-- Struct, enum, union definitions
-- Trait and trait impl definitions
-- Static and constant definitions
-- Source spans and locations
+### Type System (`rustc_public::ty`)
+- `Ty`, `TyKind`, `RigidTy`
 
-## Usage
+### Crate Definitions (`rustc_public`)
+- `CrateDef`, `CrateItem`, `ItemKind`
 
-This library provides type definitions but does not yet implement the actual conversion from unstable MIR to StableMIR. The types are ready to use as data structures.
+### Entry Points (`rustc_public`)
+- `run_with_tcx` macro
+- `local_crate`, `entry_fn`, `all_local_items`
+
+### Error Types
+- `CompilerError`
+
+## Usage Example
 
 ```rust
-use stable_mir_wrapper::mir::{Body, BasicBlock, TerminatorKind};
-use stable_mir_wrapper::ty::{Ty, RigidTy};
+#![feature(rustc_private)]
 
-// Types can be used to represent MIR data structures
-let body = Body {
-    blocks: vec![],
-    locals: /* ... */,
-    arg_count: 0,
-    var_debug_info: vec![],
-    spread_arg: None,
-    span: /* ... */,
+extern crate rustc_public;
+
+use stable_mir_wrapper::{
+    Body, Instance, MonoItem, TerminatorKind, Operand,
+    TyKind, RigidTy, CrateItem, ItemKind,
+    run_with_tcx, local_crate, all_local_items,
 };
+
+fn main() {
+    let args: Vec<_> = std::env::args().collect();
+    let _ = run_with_tcx!(&args, |tcx| {
+        let crate_name = local_crate().name;
+        println!("Analyzing crate: {}", crate_name);
+
+        for item in all_local_items() {
+            if let ItemKind::Fn = item.kind() {
+                if let Ok(instance) = Instance::try_from(item) {
+                    println!("Found function: {:?}", instance.name());
+                }
+            }
+        }
+
+        std::ops::ControlFlow::Continue(())
+    });
+}
 ```
 
 ## Current Status
 
-- ✅ All core StableMIR types implemented
-- ✅ Library compiles successfully
-- ⏳ Conversion from rustc unstable MIR not yet implemented
-- ⏳ Methods that call into rustc return placeholder values
+- ✅ Re-exports all core StableMIR types from `rustc_public`
+- ✅ Provides a stable interface for MIR analysis
+- ✅ Compiles successfully with `nightly-2025-10-02`
 
-## Future Work
+## Differences from Original Plan
 
-1. Implement conversion logic from `rustc_middle::mir` to StableMIR types
-2. Implement the `rustc_public_bridge` equivalent conversion
-3. Add thread-local context for managing type tables
-4. Implement actual data retrieval methods (currently return `None`/`Err`/empty)
+The original plan was to create a standalone implementation of StableMIR types. However, this approach was changed to:
+
+1. **Re-export directly** from `rustc_public` instead of reimplementing types
+2. **Avoid duplication** of the StableMIR implementation
+3. **Stay in sync** with the official StableMIR API as it evolves
+
+This makes the library much simpler and more maintainable.
 
 ## References
 

@@ -1,43 +1,34 @@
 //! StableMIR Wrapper - A thin wrapper providing a stable interface to MIR
 //!
 //! This library provides a stable, owned, index-based representation of Rust MIR
-//! that can be used without lifetime constraints. It mirrors the rustc_public
-//! StableMIR API one-to-one, providing a stable version until the official
-//! StableMIR API is stabilized.
-//!
-//! # Design Principles
-//!
-//! - **Index-based**: All types use opaque indices (usize) instead of references
-//! - **Owned data**: No lifetime parameters, all data is owned
-//! - **One-to-one mapping**: Matches rustc_public StableMIR API exactly
-//! - **Monomorphized only**: Only fully instantiated (monomorphic) MIR is exposed
+//! by re-exporting types from rustc_public StableMIR.
 
-// Re-export the core modules
-pub mod mir;
-pub mod ty;
-pub mod crate_def;
+#![feature(rustc_private)]
 
-// Re-export commonly used types for convenience
-pub use mir::{
-    body::{Body, BasicBlock, LocalDecl, VarDebugInfo},
-    terminator::{Terminator, TerminatorKind},
-    statement::{Statement, StatementKind},
-    rvalue::{Rvalue},
-    operand::{Operand, ConstOperand},
-    place::{Place, ProjectionElem},
-    mono::{Instance, MonoItem, StaticDef},
+extern crate rustc_public;
+
+// Re-export MIR types from rustc_public
+pub use rustc_public::mir::{
+    Body, BasicBlock, BasicBlockIdx, Local, RETURN_LOCAL,
+    LocalDecl, VarDebugInfo,
+    Terminator, TerminatorKind,
+    Statement, StatementKind,
+    Rvalue,
+    Operand, ConstOperand,
+    Place, ProjectionElem, FieldIdx,
 };
-pub use ty::{
-    Ty, TyKind, RigidTy,
-    Mutability, Movability,
-    IntTy, UintTy, FloatTy,
-    GenericArgs,
-};
-pub use crate_def::{
-    CrateDef, CrateItem,
-    FnDef, ClosureDef, CoroutineDef, CoroutineClosureDef,
-    AdtDef, StructDef, EnumDef, UnionDef, ForeignDef,
-    TraitDef, TraitImplDef,
-    ConstDef, StaticDef as CrateStaticDef,
-    Span,
-};
+
+// Re-export monomorphization types
+pub use rustc_public::mir::mono::{Instance, MonoItem, StaticDef};
+
+// Re-export type system
+pub use rustc_public::ty::{Ty, TyKind, RigidTy};
+
+// Re-export crate types
+pub use rustc_public::{CrateDef, CrateItem, ItemKind};
+
+// Re-export entry point (macros are at the root)
+pub use rustc_public::{run_with_tcx, local_crate, entry_fn, all_local_items};
+
+// Re-export error type
+pub use rustc_public::CompilerError;

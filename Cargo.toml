@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "cargo-lockbud"
 path = "src/bin/cargo-lockbud.rs"
 
+[[bin]]
+name = "wrapper-lockbud"
+path = "src/wrapper_main.rs"
+
 [dependencies]
 cargo_metadata = { version = "0.12.1", optional = true }
 directories = { version = "3.0.1", optional = true }
