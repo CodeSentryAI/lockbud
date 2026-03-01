@@ -14,13 +14,10 @@ use std::process::ExitCode;
 // Use stable-mir-wrapper for types instead of rustc_public directly
 use stable_mir_wrapper::{
     // MIR types
-    Body,
     Instance, MonoItem, StaticDef,
     TerminatorKind, Operand,
     // Type types
-    TyKind, RigidTy,
-    // Crate types
-    CrateItem, ItemKind, CrateDef,
+    TyKind, RigidTy, ItemKind, CrateDef,
     // Crate queries (from the wrapper)
     local_crate, all_local_items, entry_fn,
     // Error type

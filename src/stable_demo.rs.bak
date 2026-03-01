@@ -1,0 +1,265 @@
+//! Demo of using stable_analysis callgraph
+//!
+//! This demonstrates how to build and use a call graph with only
+//! stable_mir_wrapper types.
+
+#![feature(rustc_private)]
+
+extern crate rustc_driver;
+extern crate rustc_interface;
+extern crate rustc_middle;
+extern crate rustc_session;
+extern crate rustc_hir;
+extern crate rustc_public;
+
+use rustc_middle::ty::{TyCtxt};
+use rustc_public::external_crates;
+use rustc_session::config::ErrorOutputType;
+use rustc_session::EarlyDiagCtxt;
+use std::env;
+use std::process::ExitCode;
+use std::sync::Mutex;
+
+use stable_mir_wrapper::{
+    ClosureKind, CompilerError, ConstOperand, CrateDef, CrateItem, Instance, MonoItem, Operand, RigidTy, TerminatorKind, all_local_items, local_crate, run_with_tcx,
+    Body,
+};
+use stable_mir_wrapper::ItemKind;
+
+mod stable_analysis;
+use stable_analysis::{CallGraph, Node, closure_analysis};
+
+// Global variable to store analysis results
+static ANALYSIS_RESULT: Mutex<Option<String>> = Mutex::new(None);
+
+fn main() -> ExitCode {
+    let args: Vec<_> = env::args().collect();
+
+    let result = run_with_tcx!(&args, demo_callgraph);
+    match result {
+        Ok(_) => {
+            // Print the analysis result
+            let result = ANALYSIS_RESULT.lock().unwrap();
+            if let Some(output) = result.as_ref() {
+                eprintln!("{}", output);
+            }
+            ExitCode::SUCCESS
+        }
+        Err(CompilerError::Skipped | CompilerError::Interrupted(_)) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::FAILURE,
+    }
+}
+
+// fn resolve_callee(operand: &Operand) {
+//     match operand {
+//         Operand::Constant(ConstOperand { span, user_ty, const_ }) => {
+//             let kind = const_.ty.kind();
+//             format!("Callee kind: {:?}", kind);
+//         }
+//         _ => { /* Other operand kinds */ }
+//     }
+// }
+
+fn demo_callgraph(_tcx: TyCtxt) -> std::ops::ControlFlow<()> {
+    let local_crate = local_crate();
+    const CRATE_NAME: &str = "lock_closure";
+
+    if local_crate.name != CRATE_NAME {
+        return std::ops::ControlFlow::Continue(());
+    }
+    eprintln!("Analyzing crate: {}", local_crate.name);
+
+    let mut output = String::new();
+
+    output.push_str(&format!("=== Stable Call Graph Analysis ===\n"));
+    output.push_str(&format!("Crate: {}\n", local_crate.name));
+    output.push_str("\n");
+
+    // Collect all local items
+    let items: Vec<CrateItem> = all_local_items().into_iter().collect();
+
+    output.push_str(&format!("Found {} items\n", items.len()));
+    output.push_str("\n");
+
+    // Build the call graph
+    let mut callgraph = CallGraph::new();
+    callgraph.analyze(&items);
+
+    output.push_str(&format!("Call Graph Statistics:\n"));
+    output.push_str(&format!("  Total functions: {}\n", callgraph.node_count()));
+    output.push_str(&format!("  Total calls: {}\n", callgraph.edge_count()));
+    output.push_str("\n");
+
+    // Test: Find all three closures
+    output.push_str("=== Closure Detection Test ===\n");
+    output.push_str("\n");
+
+    let expected_closures = vec![
+        "one_closure_one_caller::{closure#0}",
+        "two_closures::{closure#0}",
+        "two_closures::{closure#1}",
+    ];
+
+    let mut found_closures = Vec::new();
+
+    for node in callgraph.nodes() {
+        let item = &node.0;
+        if let stable_mir_wrapper::MonoItem::Fn(instance) = item {
+            let name = instance.name();
+
+            // Check if this is one of our expected closures
+            for expected in &expected_closures {
+                if name.contains(expected) {
+                    found_closures.push(name.clone());
+                    output.push_str(&format!("✓ Found closure: {}\n", name));
+
+                    // Find callers (who creates/calls this closure)
+                    let callers = callgraph.predecessors(item);
+                    output.push_str(&format!("  Called by: {} functions\n", callers.len()));
+
+                    for caller in &callers {
+                        if let stable_mir_wrapper::MonoItem::Fn(caller_instance) = caller {
+                            let caller_name = caller_instance.name();
+                            output.push_str(&format!("    - {}\n", caller_name));
+
+                            // Find the exact callsite location
+                            let successors = callgraph.successors(caller);
+                            for successor in &successors {
+                                if let stable_mir_wrapper::MonoItem::Fn(successor_instance) = successor {
+                                    if successor_instance.name() == name {
+                                        // This is the edge from caller to closure
+                                        // Now let's find the callsite details
+                                        if let Some(body) = caller_instance.body() {
+                                            output.push_str(&format!("      Callsite location:\n"));
+                                            analyze_closure_callsite(*caller_instance, &name, &mut output);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    output.push_str("\n");
+                }
+            }
+        }
+    }
+
+    // Report which closures were not found
+    for expected in &expected_closures {
+        if !found_closures.iter().any(|name| name.contains(expected)) {
+            output.push_str(&format!("✗ Missing closure: {}\n", expected));
+        }
+    }
+
+    output.push_str(&format!("\nFound {} out of {} expected closures\n", found_closures.len(), expected_closures.len()));
+
+    // Test: Check for thread::spawn calls
+    output.push_str("\n=== Thread Spawn Detection Test ===\n");
+    output.push_str("\n");
+
+    let mut spawn_count = 0;
+    for node in callgraph.nodes() {
+        let item = &node.0;
+        if let stable_mir_wrapper::MonoItem::Fn(instance) = item {
+            if instance.name().contains("thread::spawn") {
+                spawn_count += 1;
+                output.push_str(&format!("✓ Found thread::spawn call\n"));
+
+                let callers = callgraph.predecessors(item);
+                for caller in &callers {
+                    if let stable_mir_wrapper::MonoItem::Fn(caller_instance) = caller {
+                        output.push_str(&format!("  Called from: {}\n", caller_instance.name()));
+                        analyze_thread_spawn_callsite(*caller_instance, &mut output);
+                    }
+                }
+            }
+        }
+    }
+
+    output.push_str(&format!("\nTotal thread::spawn calls found: {}\n", spawn_count));
+
+    // Store result
+    *ANALYSIS_RESULT.lock().unwrap() = Some(output);
+
+    std::ops::ControlFlow::Continue(())
+}
+
+/// Analyze a function to find where it calls a specific closure
+fn analyze_closure_callsite(caller: Instance, closure_name: &str, output: &mut String) {
+    if let Some(body) = caller.body() {
+        let locals = body.locals();
+
+        for (bb_idx, bb) in body.blocks.iter().enumerate() {
+            // Check terminator for calls
+            if let TerminatorKind::Call { func, ref args, .. } = &bb.terminator.kind {
+                if let Ok(func_ty) = func.ty(locals) {
+                    if let Some(RigidTy::FnDef(fn_def, _)) = func_ty.kind().rigid() {
+                        let callee_name = fn_def.name();
+                        if callee_name.contains("closure") || callee_name.contains(closure_name) {
+                            output.push_str(&format!("        Block {}: Terminator call to {}\n", bb_idx, callee_name));
+
+                            // Try to extract closure from arguments
+                            for (arg_idx, arg) in args.iter().enumerate() {
+                                if let Ok(arg_ty) = arg.ty(locals) {
+                                    if let Some(RigidTy::Closure(closure_def, _)) = arg_ty.kind().rigid() {
+                                        output.push_str(&format!("        Argument {}: Closure type {:?}\n", arg_idx, closure_def));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Analyze a function to find thread::spawn callsite details
+fn analyze_thread_spawn_callsite(caller: Instance, output: &mut String) {
+    if let Some(body) = caller.body() {
+        let locals = body.locals();
+
+        for (bb_idx, bb) in body.blocks.iter().enumerate() {
+            if let TerminatorKind::Call { func, ref args, .. } = &bb.terminator.kind {
+                if let Ok(func_ty) = func.ty(locals) {
+                    if let Some(RigidTy::FnDef(fn_def, _)) = func_ty.kind().rigid() {
+                        if fn_def.name().contains("thread::spawn") {
+                            output.push_str(&format!("    Block {}: Calls thread::spawn\n", bb_idx));
+
+                            // Analyze the closure argument
+                            if !args.is_empty() {
+                                let closure_arg = &args[0];
+                                if let Ok(arg_ty) = closure_arg.ty(locals) {
+                                    if let Some(RigidTy::Closure(closure_def, closure_args)) = arg_ty.kind().rigid() {
+                                        if let Ok(closure_instance) = Instance::resolve_closure(*closure_def, closure_args, ClosureKind::FnOnce) {
+                                            output.push_str(&format!("    Closure argument: {}\n", closure_instance.name()));
+
+                                            // Try to extract upvars from the closure
+                                            if let Some(closure_body) = closure_instance.body() {
+                                                output.push_str(&format!("    Closure body has {} locals\n", closure_body.local_decls().count()));
+                                                for (local_idx, local_decl) in closure_body.local_decls() {
+                                                    if local_idx > 0 {
+                                                        // Skip return local
+                                                        output.push_str(&format!("      Local {:?}: type {:?}\n", local_idx, local_decl.ty.kind()));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn format_mono_item(item: &stable_mir_wrapper::MonoItem) -> String {
+    match item {
+        stable_mir_wrapper::MonoItem::Fn(instance) => instance.name().to_string(),
+        stable_mir_wrapper::MonoItem::Static(def) => def.name().to_string(),
+        stable_mir_wrapper::MonoItem::GlobalAsm(_) => "<global_asm>".to_string(),
+    }
+}

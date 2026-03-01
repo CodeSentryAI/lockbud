@@ -1,0 +1,454 @@
+// WARNING: This is highly experimental output it's intended for rustc_public developers only.
+// If you find a bug or want to improve the output open a issue at https://github.com/rust-lang/project-stable-mir.
+fn one_closure_one_caller() -> () {
+    let mut _0: ();
+    let  _1: Arc<std::sync::Mutex<i32>>;
+    let mut _2: std::sync::Mutex<i32>;
+    let  _3: Arc<std::sync::Mutex<i32>>;
+    let mut _4: &Arc<std::sync::Mutex<i32>>;
+    let  _5: Arc<std::sync::Mutex<bool>>;
+    let mut _6: std::sync::Mutex<bool>;
+    let  _7: Arc<std::sync::Mutex<bool>>;
+    let mut _8: &Arc<std::sync::Mutex<bool>>;
+    let  _9: std::sync::MutexGuard<'_, bool>;
+    let mut _10: Result<std::sync::MutexGuard<'_, bool>, PoisonError<std::sync::MutexGuard<'_, bool>>>;
+    let  _11: &std::sync::Mutex<bool>;
+    let mut _12: &Arc<std::sync::Mutex<bool>>;
+    let  _13: std::sync::MutexGuard<'_, i32>;
+    let mut _14: Result<std::sync::MutexGuard<'_, i32>, PoisonError<std::sync::MutexGuard<'_, i32>>>;
+    let  _15: &std::sync::Mutex<i32>;
+    let mut _16: &Arc<std::sync::Mutex<i32>>;
+    let  _17: JoinHandle<()>;
+    let mut _18: {closure@src/main.rs:13:28: 13:35};
+    let  _19: ();
+    let mut _20: Result<(), Box<dyn Any + Send>>;
+    let mut _21: bool;
+    let mut _22: bool;
+    debug lock_a1 => _1;
+    debug lock_a2 => _3;
+    debug lock_b1 => _5;
+    debug lock_b2 => _7;
+    debug _b => _9;
+    debug _a => _13;
+    debug th => _17;
+    bb0: {
+        _22 = false;
+        _21 = false;
+        _2 = std::sync::Mutex::<i32>::new(1_i32) -> [return: bb1, unwind continue];
+    }
+    bb1: {
+        _1 = Arc::<std::sync::Mutex<i32>>::new(move _2) -> [return: bb2, unwind continue];
+    }
+    bb2: {
+        _4 = &_1;
+        _3 = <Arc<std::sync::Mutex<i32>> as Clone>::clone(move _4) -> [return: bb3, unwind: bb22];
+    }
+    bb3: {
+        _22 = true;
+        _6 = std::sync::Mutex::<bool>::new(true) -> [return: bb4, unwind: bb27];
+    }
+    bb4: {
+        _5 = Arc::<std::sync::Mutex<bool>>::new(move _6) -> [return: bb5, unwind: bb27];
+    }
+    bb5: {
+        _8 = &_5;
+        _7 = <Arc<std::sync::Mutex<bool>> as Clone>::clone(move _8) -> [return: bb6, unwind: bb21];
+    }
+    bb6: {
+        _21 = true;
+        _12 = &_5;
+        _11 = <Arc<std::sync::Mutex<bool>> as Deref>::deref(move _12) -> [return: bb7, unwind: bb25];
+    }
+    bb7: {
+        _10 = std::sync::Mutex::<bool>::lock(_11) -> [return: bb8, unwind: bb25];
+    }
+    bb8: {
+        _9 = Result::<std::sync::MutexGuard<'_, bool>, PoisonError<std::sync::MutexGuard<'_, bool>>>::unwrap(move _10) -> [return: bb9, unwind: bb25];
+    }
+    bb9: {
+        _16 = &_1;
+        _15 = <Arc<std::sync::Mutex<i32>> as Deref>::deref(move _16) -> [return: bb10, unwind: bb20];
+    }
+    bb10: {
+        _14 = std::sync::Mutex::<i32>::lock(_15) -> [return: bb11, unwind: bb20];
+    }
+    bb11: {
+        _13 = Result::<std::sync::MutexGuard<'_, i32>, PoisonError<std::sync::MutexGuard<'_, i32>>>::unwrap(move _14) -> [return: bb12, unwind: bb20];
+    }
+    bb12: {
+        drop(_13) -> [return: bb13, unwind: bb20];
+    }
+    bb13: {
+        drop(_9) -> [return: bb14, unwind: bb25];
+    }
+    bb14: {
+        _22 = false;
+        _21 = false;
+        _18 = {closure@src/main.rs:13:28: 13:35}(move _3, move _7);
+        _17 = spawn::<{closure@src/main.rs:13:28: 13:35}, ()>(move _18) -> [return: bb15, unwind: bb25];
+    }
+    bb15: {
+        _20 = JoinHandle::<()>::join(move _17) -> [return: bb16, unwind: bb25];
+    }
+    bb16: {
+        _19 = Result::<(), Box<dyn Any + Send>>::unwrap(move _20) -> [return: bb17, unwind: bb25];
+    }
+    bb17: {
+        _21 = false;
+        drop(_5) -> [return: bb18, unwind: bb27];
+    }
+    bb18: {
+        _22 = false;
+        drop(_1) -> [return: bb19, unwind continue];
+    }
+    bb19: {
+        return;
+    }
+    bb20: {
+        drop(_9) -> [return: bb25, unwind terminate];
+    }
+    bb21: {
+        drop(_5) -> [return: bb27, unwind terminate];
+    }
+    bb22: {
+        drop(_1) -> [return: bb23, unwind terminate];
+    }
+    bb23: {
+        resume;
+    }
+    bb24: {
+        drop(_7) -> [return: bb21, unwind terminate];
+    }
+    bb25: {
+        switchInt(_21) -> [0: bb21, otherwise: bb24];
+    }
+    bb26: {
+        drop(_3) -> [return: bb22, unwind terminate];
+    }
+    bb27: {
+        switchInt(_22) -> [0: bb22, otherwise: bb26];
+    }
+}
+fn one_closure_one_caller::{closure#0}(_1: {closure@src/main.rs:13:28: 13:35}) -> () {
+    let mut _0: ();
+    let  _2: std::sync::MutexGuard<'_, i32>;
+    let mut _3: Result<std::sync::MutexGuard<'_, i32>, PoisonError<std::sync::MutexGuard<'_, i32>>>;
+    let  _4: &std::sync::Mutex<i32>;
+    let mut _5: &Arc<std::sync::Mutex<i32>>;
+    let  _6: std::sync::MutexGuard<'_, bool>;
+    let mut _7: Result<std::sync::MutexGuard<'_, bool>, PoisonError<std::sync::MutexGuard<'_, bool>>>;
+    let  _8: &std::sync::Mutex<bool>;
+    let mut _9: &Arc<std::sync::Mutex<bool>>;
+    debug lock_a2 => (_1.0: std::sync::Arc<std::sync::Mutex<i32>>);
+    debug lock_b2 => (_1.1: std::sync::Arc<std::sync::Mutex<bool>>);
+    debug _a => _2;
+    debug _b => _6;
+    bb0: {
+        _5 = &(_1.0: std::sync::Arc<std::sync::Mutex<i32>>);
+        _4 = <Arc<std::sync::Mutex<i32>> as Deref>::deref(move _5) -> [return: bb1, unwind: bb11];
+    }
+    bb1: {
+        _3 = std::sync::Mutex::<i32>::lock(_4) -> [return: bb2, unwind: bb11];
+    }
+    bb2: {
+        _2 = Result::<std::sync::MutexGuard<'_, i32>, PoisonError<std::sync::MutexGuard<'_, i32>>>::unwrap(move _3) -> [return: bb3, unwind: bb11];
+    }
+    bb3: {
+        _9 = &(_1.1: std::sync::Arc<std::sync::Mutex<bool>>);
+        _8 = <Arc<std::sync::Mutex<bool>> as Deref>::deref(move _9) -> [return: bb4, unwind: bb10];
+    }
+    bb4: {
+        _7 = std::sync::Mutex::<bool>::lock(_8) -> [return: bb5, unwind: bb10];
+    }
+    bb5: {
+        _6 = Result::<std::sync::MutexGuard<'_, bool>, PoisonError<std::sync::MutexGuard<'_, bool>>>::unwrap(move _7) -> [return: bb6, unwind: bb10];
+    }
+    bb6: {
+        drop(_6) -> [return: bb7, unwind: bb10];
+    }
+    bb7: {
+        drop(_2) -> [return: bb8, unwind: bb11];
+    }
+    bb8: {
+        drop(_1) -> [return: bb9, unwind continue];
+    }
+    bb9: {
+        return;
+    }
+    bb10: {
+        drop(_2) -> [return: bb11, unwind terminate];
+    }
+    bb11: {
+        drop(_1) -> [return: bb12, unwind terminate];
+    }
+    bb12: {
+        resume;
+    }
+}
+fn two_closures() -> () {
+    let mut _0: ();
+    let  _1: Arc<std::sync::Mutex<i32>>;
+    let mut _2: std::sync::Mutex<i32>;
+    let  _3: Arc<std::sync::Mutex<i32>>;
+    let mut _4: &Arc<std::sync::Mutex<i32>>;
+    let  _5: Arc<std::sync::Mutex<bool>>;
+    let mut _6: std::sync::Mutex<bool>;
+    let  _7: Arc<std::sync::Mutex<bool>>;
+    let mut _8: &Arc<std::sync::Mutex<bool>>;
+    let  _9: JoinHandle<()>;
+    let mut _10: {closure@src/main.rs:25:29: 25:36};
+    let  _11: JoinHandle<()>;
+    let mut _12: {closure@src/main.rs:29:29: 29:36};
+    let  _13: ();
+    let mut _14: Result<(), Box<dyn Any + Send>>;
+    let mut _15: JoinHandle<()>;
+    let  _16: ();
+    let mut _17: Result<(), Box<dyn Any + Send>>;
+    let mut _18: JoinHandle<()>;
+    let mut _19: bool;
+    let mut _20: bool;
+    let mut _21: bool;
+    let mut _22: bool;
+    let mut _23: bool;
+    let mut _24: bool;
+    debug lock_a1 => _1;
+    debug lock_a2 => _3;
+    debug lock_b1 => _5;
+    debug lock_b2 => _7;
+    debug th1 => _9;
+    debug th2 => _11;
+    bb0: {
+        _24 = false;
+        _23 = false;
+        _22 = false;
+        _21 = false;
+        _20 = false;
+        _19 = false;
+        _2 = std::sync::Mutex::<i32>::new(1_i32) -> [return: bb1, unwind continue];
+    }
+    bb1: {
+        _24 = true;
+        _1 = Arc::<std::sync::Mutex<i32>>::new(move _2) -> [return: bb2, unwind continue];
+    }
+    bb2: {
+        _4 = &_1;
+        _3 = <Arc<std::sync::Mutex<i32>> as Clone>::clone(move _4) -> [return: bb3, unwind: bb25];
+    }
+    bb3: {
+        _23 = true;
+        _6 = std::sync::Mutex::<bool>::new(true) -> [return: bb4, unwind: bb23];
+    }
+    bb4: {
+        _5 = Arc::<std::sync::Mutex<bool>>::new(move _6) -> [return: bb5, unwind: bb23];
+    }
+    bb5: {
+        _22 = true;
+        _8 = &_5;
+        _7 = <Arc<std::sync::Mutex<bool>> as Clone>::clone(move _8) -> [return: bb6, unwind: bb21];
+    }
+    bb6: {
+        _21 = true;
+        _22 = false;
+        _24 = false;
+        _10 = {closure@src/main.rs:25:29: 25:36}(move _5, move _1);
+        _9 = spawn::<{closure@src/main.rs:25:29: 25:36}, ()>(move _10) -> [return: bb7, unwind: bb19];
+    }
+    bb7: {
+        _20 = true;
+        _23 = false;
+        _21 = false;
+        _12 = {closure@src/main.rs:29:29: 29:36}(move _3, move _7);
+        _11 = spawn::<{closure@src/main.rs:29:29: 29:36}, ()>(move _12) -> [return: bb8, unwind: bb17];
+    }
+    bb8: {
+        _19 = true;
+        _20 = false;
+        _15 = move _9;
+        _14 = JoinHandle::<()>::join(move _15) -> [return: bb9, unwind: bb15];
+    }
+    bb9: {
+        _13 = Result::<(), Box<dyn Any + Send>>::unwrap(move _14) -> [return: bb10, unwind: bb15];
+    }
+    bb10: {
+        _19 = false;
+        _18 = move _11;
+        _17 = JoinHandle::<()>::join(move _18) -> [return: bb11, unwind: bb15];
+    }
+    bb11: {
+        _16 = Result::<(), Box<dyn Any + Send>>::unwrap(move _17) -> [return: bb12, unwind: bb15];
+    }
+    bb12: {
+        _19 = false;
+        _20 = false;
+        _21 = false;
+        _22 = false;
+        _23 = false;
+        _24 = false;
+        return;
+    }
+    bb13: {
+        resume;
+    }
+    bb14: {
+        drop(_11) -> [return: bb17, unwind terminate];
+    }
+    bb15: {
+        switchInt(_19) -> [0: bb17, otherwise: bb14];
+    }
+    bb16: {
+        drop(_9) -> [return: bb19, unwind terminate];
+    }
+    bb17: {
+        switchInt(_20) -> [0: bb19, otherwise: bb16];
+    }
+    bb18: {
+        drop(_7) -> [return: bb21, unwind terminate];
+    }
+    bb19: {
+        switchInt(_21) -> [0: bb21, otherwise: bb18];
+    }
+    bb20: {
+        drop(_5) -> [return: bb23, unwind terminate];
+    }
+    bb21: {
+        switchInt(_22) -> [0: bb23, otherwise: bb20];
+    }
+    bb22: {
+        drop(_3) -> [return: bb25, unwind terminate];
+    }
+    bb23: {
+        switchInt(_23) -> [0: bb25, otherwise: bb22];
+    }
+    bb24: {
+        drop(_1) -> [return: bb13, unwind terminate];
+    }
+    bb25: {
+        switchInt(_24) -> [0: bb13, otherwise: bb24];
+    }
+}
+fn two_closures::{closure#0}(_1: {closure@src/main.rs:25:29: 25:36}) -> () {
+    let mut _0: ();
+    let  _2: std::sync::MutexGuard<'_, bool>;
+    let mut _3: Result<std::sync::MutexGuard<'_, bool>, PoisonError<std::sync::MutexGuard<'_, bool>>>;
+    let  _4: &std::sync::Mutex<bool>;
+    let mut _5: &Arc<std::sync::Mutex<bool>>;
+    let  _6: std::sync::MutexGuard<'_, i32>;
+    let mut _7: Result<std::sync::MutexGuard<'_, i32>, PoisonError<std::sync::MutexGuard<'_, i32>>>;
+    let  _8: &std::sync::Mutex<i32>;
+    let mut _9: &Arc<std::sync::Mutex<i32>>;
+    debug lock_b1 => (_1.0: std::sync::Arc<std::sync::Mutex<bool>>);
+    debug lock_a1 => (_1.1: std::sync::Arc<std::sync::Mutex<i32>>);
+    debug _b => _2;
+    debug _a => _6;
+    bb0: {
+        _5 = &(_1.0: std::sync::Arc<std::sync::Mutex<bool>>);
+        _4 = <Arc<std::sync::Mutex<bool>> as Deref>::deref(move _5) -> [return: bb1, unwind: bb11];
+    }
+    bb1: {
+        _3 = std::sync::Mutex::<bool>::lock(_4) -> [return: bb2, unwind: bb11];
+    }
+    bb2: {
+        _2 = Result::<std::sync::MutexGuard<'_, bool>, PoisonError<std::sync::MutexGuard<'_, bool>>>::unwrap(move _3) -> [return: bb3, unwind: bb11];
+    }
+    bb3: {
+        _9 = &(_1.1: std::sync::Arc<std::sync::Mutex<i32>>);
+        _8 = <Arc<std::sync::Mutex<i32>> as Deref>::deref(move _9) -> [return: bb4, unwind: bb10];
+    }
+    bb4: {
+        _7 = std::sync::Mutex::<i32>::lock(_8) -> [return: bb5, unwind: bb10];
+    }
+    bb5: {
+        _6 = Result::<std::sync::MutexGuard<'_, i32>, PoisonError<std::sync::MutexGuard<'_, i32>>>::unwrap(move _7) -> [return: bb6, unwind: bb10];
+    }
+    bb6: {
+        drop(_6) -> [return: bb7, unwind: bb10];
+    }
+    bb7: {
+        drop(_2) -> [return: bb8, unwind: bb11];
+    }
+    bb8: {
+        drop(_1) -> [return: bb9, unwind continue];
+    }
+    bb9: {
+        return;
+    }
+    bb10: {
+        drop(_2) -> [return: bb11, unwind terminate];
+    }
+    bb11: {
+        drop(_1) -> [return: bb12, unwind terminate];
+    }
+    bb12: {
+        resume;
+    }
+}
+fn two_closures::{closure#1}(_1: {closure@src/main.rs:29:29: 29:36}) -> () {
+    let mut _0: ();
+    let  _2: std::sync::MutexGuard<'_, i32>;
+    let mut _3: Result<std::sync::MutexGuard<'_, i32>, PoisonError<std::sync::MutexGuard<'_, i32>>>;
+    let  _4: &std::sync::Mutex<i32>;
+    let mut _5: &Arc<std::sync::Mutex<i32>>;
+    let  _6: std::sync::MutexGuard<'_, bool>;
+    let mut _7: Result<std::sync::MutexGuard<'_, bool>, PoisonError<std::sync::MutexGuard<'_, bool>>>;
+    let  _8: &std::sync::Mutex<bool>;
+    let mut _9: &Arc<std::sync::Mutex<bool>>;
+    debug lock_a2 => (_1.0: std::sync::Arc<std::sync::Mutex<i32>>);
+    debug lock_b2 => (_1.1: std::sync::Arc<std::sync::Mutex<bool>>);
+    debug _a => _2;
+    debug _b => _6;
+    bb0: {
+        _5 = &(_1.0: std::sync::Arc<std::sync::Mutex<i32>>);
+        _4 = <Arc<std::sync::Mutex<i32>> as Deref>::deref(move _5) -> [return: bb1, unwind: bb11];
+    }
+    bb1: {
+        _3 = std::sync::Mutex::<i32>::lock(_4) -> [return: bb2, unwind: bb11];
+    }
+    bb2: {
+        _2 = Result::<std::sync::MutexGuard<'_, i32>, PoisonError<std::sync::MutexGuard<'_, i32>>>::unwrap(move _3) -> [return: bb3, unwind: bb11];
+    }
+    bb3: {
+        _9 = &(_1.1: std::sync::Arc<std::sync::Mutex<bool>>);
+        _8 = <Arc<std::sync::Mutex<bool>> as Deref>::deref(move _9) -> [return: bb4, unwind: bb10];
+    }
+    bb4: {
+        _7 = std::sync::Mutex::<bool>::lock(_8) -> [return: bb5, unwind: bb10];
+    }
+    bb5: {
+        _6 = Result::<std::sync::MutexGuard<'_, bool>, PoisonError<std::sync::MutexGuard<'_, bool>>>::unwrap(move _7) -> [return: bb6, unwind: bb10];
+    }
+    bb6: {
+        drop(_6) -> [return: bb7, unwind: bb10];
+    }
+    bb7: {
+        drop(_2) -> [return: bb8, unwind: bb11];
+    }
+    bb8: {
+        drop(_1) -> [return: bb9, unwind continue];
+    }
+    bb9: {
+        return;
+    }
+    bb10: {
+        drop(_2) -> [return: bb11, unwind terminate];
+    }
+    bb11: {
+        drop(_1) -> [return: bb12, unwind terminate];
+    }
+    bb12: {
+        resume;
+    }
+}
+fn main() -> () {
+    let mut _0: ();
+    let  _1: ();
+    let  _2: ();
+    bb0: {
+        _1 = one_closure_one_caller() -> [return: bb1, unwind continue];
+    }
+    bb1: {
+        _2 = two_closures() -> [return: bb2, unwind continue];
+    }
+    bb2: {
+        return;
+    }
+}

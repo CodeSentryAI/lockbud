@@ -1,3 +1,6 @@
+[workspace]
+# This is an independent workspace
+
 [package]
 name = "conflict"
 version = "0.1.0"

@@ -13,16 +13,18 @@ pub use rustc_public::mir::{
     LocalDecl, VarDebugInfo,
     Terminator, TerminatorKind,
     Statement, StatementKind,
-    Rvalue,
+    Rvalue, CastKind, PointerCoercion,
     Operand, ConstOperand,
     Place, ProjectionElem, FieldIdx,
+    MirVisitor, visit::Location,
+    alloc::{AllocId, GlobalAlloc},
 };
 
 // Re-export monomorphization types
-pub use rustc_public::mir::mono::{Instance, MonoItem, StaticDef};
+pub use rustc_public::mir::mono::{Instance, InstanceKind, MonoItem, StaticDef};
 
 // Re-export type system
-pub use rustc_public::ty::{Ty, TyKind, RigidTy};
+pub use rustc_public::ty::{Ty, TyKind, RigidTy, ConstantKind, ClosureKind, Allocation, GenericArgs, FnDef, ClosureDef};
 
 // Re-export crate types
 pub use rustc_public::{CrateDef, CrateItem, ItemKind};
