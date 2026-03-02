@@ -3,12 +3,13 @@
 //! This module provides the core types for identifying and tracking MutexGuards
 //! across the program.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use log::debug;
 use stable_mir_wrapper::{
     Instance, Local, BasicBlockIdx, Ty, TyKind, RigidTy,
+    Body, MirVisitor, Place, Operand, Rvalue, Statement, Terminator,
 };
 
 /// MIR Location tracking block and statement indices
@@ -523,10 +524,366 @@ impl LockTypeCollector {
 
         debug!("\n=== End Lock Type Summary ===\n");
     }
+
+    /// Get formatted summary of collected lock types as a string
+    pub fn format_summary(&self) -> String {
+        let mut output = String::new();
+
+        if self.all_lock_types.is_empty() && self.all_guard_types.is_empty() {
+            output.push_str("No lock or guard types found in this crate\n");
+            return output;
+        }
+
+        // Print all lock types found
+        if !self.all_lock_types.is_empty() {
+            output.push_str(&format!("Lock Types Found ({}):\n", self.all_lock_types.len()));
+            for (i, lock_type) in self.all_lock_types.iter().enumerate() {
+                output.push_str(&format!("  {}. {} ({})\n",
+                    i + 1, lock_type.kind, lock_type.library));
+            }
+            output.push_str("\n");
+        }
+
+        // Print all guard types found
+        if !self.all_guard_types.is_empty() {
+            output.push_str(&format!("Guard Types Found ({}):\n", self.all_guard_types.len()));
+            for (i, guard_type) in self.all_guard_types.iter().enumerate() {
+                output.push_str(&format!("  {}. {}\n", i + 1, guard_type));
+            }
+            output.push_str("\n");
+        }
+
+        // Print instances with locks
+        if !self.instance_locks.is_empty() {
+            output.push_str(&format!("Instances Using Locks ({}):\n", self.instance_locks.len()));
+            for (instance_name, lock_types) in &self.instance_locks {
+                output.push_str(&format!("  Instance: {}\n", instance_name));
+                for lock_type in lock_types {
+                    output.push_str(&format!("    - {} ({})\n", lock_type.kind, lock_type.library));
+                }
+            }
+            output.push_str("\n");
+        }
+
+        output
+    }
 }
 
 impl Default for LockTypeCollector {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Type signature for efficient type comparison
+///
+/// Since Ty doesn't implement PartialEq/Hash, we use the Debug string
+/// representation as a proxy for type identity.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct TySignature {
+    /// String representation of the type
+    pub type_str: String,
+}
+
+impl TySignature {
+    /// Create a signature from a Ty
+    pub fn from_ty(ty: &Ty) -> Self {
+        Self {
+            type_str: format!("{:?}", ty),
+        }
+    }
+
+    /// Check if this signature matches a lock pattern
+    pub fn is_lock_type(&self) -> bool {
+        self.type_str.contains("Mutex") || self.type_str.contains("RwLock")
+    }
+
+    /// Check if this signature matches a guard pattern
+    pub fn is_guard_type(&self) -> bool {
+        self.type_str.contains("MutexGuard")
+            || self.type_str.contains("RwLockReadGuard")
+            || self.type_str.contains("RwLockWriteGuard")
+    }
+}
+
+/// MirVisitor-based type collector for efficient lock/guard type detection
+///
+/// This collector uses the MirVisitor trait to traverse all types in a MIR body,
+/// collecting type signatures that match lock/guard patterns. This is more
+/// efficient than string matching on every local and more complete as it
+/// finds types in expressions, not just local declarations.
+pub struct MirVisitorTypeCollector<'a> {
+    /// The MIR body being analyzed
+    body: &'a Body,
+    /// Instance name for reporting
+    instance_name: String,
+    /// Type signatures of lock types found
+    lock_signatures: HashSet<TySignature>,
+    /// Type signatures of guard types found
+    guard_signatures: HashSet<TySignature>,
+    /// Map from local to their lock type signatures
+    locals_with_locks: HashMap<Local, TySignature>,
+    /// Map from local to their guard type signatures
+    locals_with_guards: HashMap<Local, TySignature>,
+    /// All places (not just locals) that have lock types
+    lock_places: Vec<Place>,
+    /// All places that have guard types
+    guard_places: Vec<Place>,
+}
+
+impl<'a> MirVisitorTypeCollector<'a> {
+    /// Create a new visitor for the given body
+    pub fn new(body: &'a Body, instance_name: String) -> Self {
+        Self {
+            body,
+            instance_name,
+            lock_signatures: HashSet::new(),
+            guard_signatures: HashSet::new(),
+            locals_with_locks: HashMap::new(),
+            locals_with_guards: HashMap::new(),
+            lock_places: Vec::new(),
+            guard_places: Vec::new(),
+        }
+    }
+
+    /// Analyze the body and collect all lock/guard types
+    pub fn analyze(&mut self) {
+        debug!("[Instance: {}] Starting MirVisitor type collection", self.instance_name);
+
+        // Visit the entire body - this will call our visitor methods
+        self.visit_body(self.body);
+
+        debug!("[Instance: {}] Found {} lock type signatures and {} guard type signatures",
+            self.instance_name,
+            self.lock_signatures.len(),
+            self.guard_signatures.len());
+    }
+
+    /// Check if a type signature is interesting (lock or guard)
+    fn check_ty_signature(&mut self, ty: &Ty, place: Option<&Place>) {
+        let sig = TySignature::from_ty(ty);
+
+        if sig.is_lock_type() {
+            self.lock_signatures.insert(sig.clone());
+
+            if let Some(place) = place {
+                self.lock_places.push(place.clone());
+                let local = place.local;
+if true {
+                    self.locals_with_locks.insert(local, sig.clone());
+                }
+            }
+
+            debug!("[Instance: {}] Found lock type: {}", self.instance_name, sig.type_str);
+        }
+
+        if sig.is_guard_type() {
+            self.guard_signatures.insert(sig.clone());
+
+            if let Some(place) = place {
+                self.guard_places.push(place.clone());
+                let local = place.local;
+if true {
+                    self.locals_with_guards.insert(local, sig.clone());
+                }
+            }
+
+            debug!("[Instance: {}] Found guard type: {}", self.instance_name, sig.type_str);
+        }
+    }
+
+    /// Get all lock type signatures found
+    pub fn lock_signatures(&self) -> &HashSet<TySignature> {
+        &self.lock_signatures
+    }
+
+    /// Get all guard type signatures found
+    pub fn guard_signatures(&self) -> &HashSet<TySignature> {
+        &self.guard_signatures
+    }
+
+    /// Get locals that have lock types
+    pub fn locals_with_locks(&self) -> &HashMap<Local, TySignature> {
+        &self.locals_with_locks
+    }
+
+    /// Get locals that have guard types
+    pub fn locals_with_guards(&self) -> &HashMap<Local, TySignature> {
+        &self.locals_with_guards
+    }
+
+    /// Check if the body contains any lock or guard types
+    pub fn has_lock_types(&self) -> bool {
+        !self.lock_signatures.is_empty() || !self.guard_signatures.is_empty()
+    }
+
+    /// Format a summary of findings
+    pub fn format_summary(&self) -> String {
+        let mut output = String::new();
+
+        output.push_str(&format!("Instance: {}\n", self.instance_name));
+
+        if !self.lock_signatures.is_empty() {
+            output.push_str(&format!("  Lock types found: {}\n", self.lock_signatures.len()));
+            for sig in &self.lock_signatures {
+                output.push_str(&format!("    - {}\n", sig.type_str));
+            }
+        }
+
+        if !self.guard_signatures.is_empty() {
+            output.push_str(&format!("  Guard types found: {}\n", self.guard_signatures.len()));
+            for sig in &self.guard_signatures {
+                output.push_str(&format!("    - {}\n", sig.type_str));
+            }
+        }
+
+        if !self.locals_with_locks.is_empty() {
+            output.push_str(&format!("  Locals with locks: {}\n", self.locals_with_locks.len()));
+        }
+
+        if !self.locals_with_guards.is_empty() {
+            output.push_str(&format!("  Locals with guards: {}\n", self.locals_with_guards.len()));
+        }
+
+        output
+    }
+}
+
+impl MirVisitor for MirVisitorTypeCollector<'_> {
+    fn visit_body(&mut self, body: &Body) {
+        // Visit all basic blocks
+        for (bb_idx, bb) in body.blocks.iter().enumerate() {
+            // Visit statements
+            for stmt in &bb.statements {
+                let loc = unsafe { std::mem::zeroed() };
+                self.visit_statement(stmt, loc);
+            }
+
+            // Visit terminator
+            let loc = unsafe { std::mem::zeroed() };
+            self.visit_terminator(&bb.terminator, loc);
+        }
+    }
+
+    fn visit_statement(&mut self, statement: &Statement, _location: stable_mir_wrapper::Location) {
+        use stable_mir_wrapper::StatementKind;
+
+        match &statement.kind {
+            StatementKind::Assign(place, rvalue) => {
+                // Check the type of the destination place
+                if let Ok(ty) = place.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, Some(place));
+                }
+
+                // Check types in the rvalue
+                self.visit_rvalue(rvalue, _location);
+            }
+            StatementKind::FakeRead(_, place) => {
+                if let Ok(ty) = place.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, Some(place));
+                }
+            }
+            StatementKind::SetDiscriminant { place, .. } => {
+                if let Ok(ty) = place.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, Some(place));
+                }
+            }
+            _ => {
+                self.super_statement(statement, _location);
+            }
+        }
+    }
+
+    fn visit_rvalue(&mut self, rvalue: &Rvalue, _location: stable_mir_wrapper::Location) {
+        use stable_mir_wrapper::Rvalue::*;
+
+        match rvalue {
+            Use(operand) | Repeat(operand, _) | Cast(_, operand, _) => {
+                if let Ok(ty) = operand.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, None);
+                }
+                self.super_operand(operand, _location);
+            }
+            Ref(_, _, place) => {
+                if let Ok(ty) = place.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, Some(place));
+                }
+                // Use super_rvalue to avoid PlaceContext complexity
+                self.super_rvalue(rvalue, _location);
+            }
+            BinaryOp(_, op1, op2) | CheckedBinaryOp(_, op1, op2) => {
+                if let Ok(ty) = op1.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, None);
+                }
+                if let Ok(ty) = op2.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, None);
+                }
+                self.super_operand(op1, _location);
+                self.super_operand(op2, _location);
+            }
+            UnaryOp(_, op1) => {
+                if let Ok(ty) = op1.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, None);
+                }
+                self.super_operand(op1, _location);
+            }
+            Aggregate(_, operands) => {
+                // Check aggregate operands
+                for operand in operands {
+                    if let Ok(ty) = operand.ty(self.body.locals()) {
+                        self.check_ty_signature(&ty, None);
+                    }
+                    self.super_operand(operand, _location);
+                }
+            }
+            _ => {
+                self.super_rvalue(rvalue, _location);
+            }
+        }
+    }
+
+    fn visit_terminator(&mut self, terminator: &Terminator, _location: stable_mir_wrapper::Location) {
+        use stable_mir_wrapper::TerminatorKind::*;
+
+        match &terminator.kind {
+            Call { func, args, destination, .. } => {
+                // Check function type
+                if let Ok(ty) = func.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, None);
+                }
+
+                // Check destination type
+                if let Ok(ty) = destination.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, Some(destination));
+                }
+
+                // Check argument types
+                for arg in args {
+                    if let Ok(ty) = arg.ty(self.body.locals()) {
+                        self.check_ty_signature(&ty, None);
+                    }
+                }
+            }
+            Drop { place, .. } => {
+                if let Ok(ty) = place.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, Some(place));
+                }
+            }
+            Assert { cond, .. } => {
+                if let Ok(ty) = cond.ty(self.body.locals()) {
+                    self.check_ty_signature(&ty, None);
+                }
+            }
+            _ => {}
+        }
+
+        self.super_terminator(terminator, _location);
+    }
+
+    fn visit_place(&mut self, place: &Place, _context: rustc_public::mir::visit::PlaceContext, _location: stable_mir_wrapper::Location) {
+        if let Ok(ty) = place.ty(self.body.locals()) {
+            self.check_ty_signature(&ty, Some(place));
+        }
+        self.super_place(place, _context, _location);
     }
 }

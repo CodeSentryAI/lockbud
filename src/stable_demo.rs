@@ -28,7 +28,7 @@ use stable_mir_wrapper::{
 use stable_mir_wrapper::ItemKind;
 
 mod stable_analysis;
-use stable_analysis::{CallGraph, Node, closure_analysis, LockDetector, LockReport, LockBugKind};
+use stable_analysis::{CallGraph, Node, closure_analysis, LockDetector, LockReport, LockBugKind, MirVisitorTypeCollector};
 
 // Global variable to store analysis results
 static ANALYSIS_RESULT: Mutex<Option<String>> = Mutex::new(None);
@@ -284,16 +284,79 @@ fn demo_callgraph(_tcx: TyCtxt) -> std::ops::ControlFlow<()> {
 
     output.push_str(&format!("Total thread::spawn calls found: {}\n", spawn_count));
 
-    // Lock type analysis
+    // Quick lock usage check
     output.push_str("\n=== Lock Type Analysis ===\n");
     output.push_str("\n");
 
-    let mut type_collector = stable_analysis::lock_types::LockTypeCollector::new();
-    type_collector.analyze_crate(&items);
+    let quick_scanner = stable_analysis::QuickLockScanner::new();
 
-    // Add summary to output
-    output.push_str(&format!("Total lock types found: {}\n", type_collector.all_lock_types.len()));
-    output.push_str(&format!("Total guard types found: {}\n", type_collector.all_guard_types.len()));
+    // Fast check: does this crate use locks?
+    let uses_locks = quick_scanner.crate_uses_locks(&items);
+
+    if !uses_locks {
+        output.push_str("No lock types (Mutex, RwLock) found in this crate\n");
+        output.push_str("Skipping detailed lock analysis.\n");
+        output.push_str("\n");
+    } else {
+        // Locks found - do detailed analysis
+        let lock_info = quick_scanner.scan_lock_types(&items);
+
+        output.push_str(&format!("Lock usage detected!\n"));
+        output.push_str(&format!("Functions using locks: {}\n", lock_info.instances_with_locks.len()));
+        output.push_str(&format!("Unique lock types found: {}\n", lock_info.lock_types_found.len()));
+
+        // Show which functions use locks
+        if !lock_info.instances_with_locks.is_empty() {
+            output.push_str("\nFunctions:\n");
+            for instance_name in &lock_info.instances_with_locks {
+                output.push_str(&format!("  - {}\n", instance_name));
+            }
+        }
+        output.push_str("\n");
+
+        // Detailed type collection using original collector
+        let mut type_collector = stable_analysis::lock_types::LockTypeCollector::new();
+        type_collector.analyze_crate(&items);
+        output.push_str(&type_collector.format_summary());
+
+        // MirVisitor-based analysis (finds types in expressions too)
+        output.push_str("\n--- MirVisitor Type Collection ---\n");
+        output.push_str("(Finds types in expressions, not just locals)\n");
+        output.push_str("\n");
+
+        let mut visitor_collected_count = 0;
+        for item in &items {
+            if let Ok(instance) = Instance::try_from(*item) {
+                let instance_name = instance.name();
+                // Skip very long names and std library functions
+                if instance_name.len() > 200 || instance_name.starts_with("std::") {
+                    continue;
+                }
+
+                if let Some(body) = instance.body() {
+                    let mut visitor = MirVisitorTypeCollector::new(&body, instance_name.clone());
+                    visitor.analyze();
+
+                    if visitor.has_lock_types() {
+                        visitor_collected_count += 1;
+                        output.push_str(&visitor.format_summary());
+                        output.push_str("\n");
+
+                        // Limit output
+                        if visitor_collected_count >= 5 {
+                            output.push_str("... (output truncated after 5 instances)\n");
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if visitor_collected_count == 0 {
+            output.push_str("No lock types found by MirVisitor (unexpected!)\n");
+        }
+    }
+
     output.push_str("\n");
 
     // Lock detection summary

@@ -11,15 +11,21 @@ pub mod closure_analysis;
 
 // Lock detection modules
 pub mod lock_types;
+pub mod lock_types_quick;
 pub mod lock_lifecycle;
 pub mod lock_identity;
 pub mod lock_detector;
+
+pub use lock_types_quick::{QuickLockScanner, LockUsageInfo};
 
 pub use callgraph::{CallGraph, Node};
 pub use closure_analysis::ClosureInfo;
 
 // Lock detection exports
-pub use lock_types::{LockGuardId, LockGuardTy, LockGuardInfo, DeadlockPossibility};
+pub use lock_types::{
+    LockGuardId, LockGuardTy, LockGuardInfo, DeadlockPossibility,
+    TySignature, MirVisitorTypeCollector,
+};
 pub use lock_lifecycle::LockLifecycleCollector;
 pub use lock_identity::{MutexIdentity, MutexIdentityAnalyzer};
 pub use lock_detector::{LockDetector, LockReport, LockBugKind};
