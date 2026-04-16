@@ -3,6 +3,7 @@
 pub mod analysis;
 pub mod atomic;
 pub mod callgraph;
+pub mod channel;
 pub mod collector;
 pub mod condvar;
 pub mod detector;
@@ -27,7 +28,7 @@ pub fn run(crate_data: &CrateData, report_path: Option<&std::path::Path>) {
 
     log::info!("Collected {} lockguards", lockguards.len());
     for (id, info) in lockguards.iter() {
-        log::info!("  guard {:?}: ty={:?} gen_locs={} kill_locs={} recv={:?}", id, info.lockguard_ty, info.gen_locs.len(), info.kill_locs.len(), info.receiver_place);
+        log::info!("  guard {:?}: ty={:?} gen_locs={} kill_locs={} recv={:?} alias_of={:?}", id, info.lockguard_ty, info.gen_locs.len(), info.kill_locs.len(), info.receiver_place, info.alias_of);
     }
 
     // 3. Collect condvar API callsites.
@@ -66,6 +67,14 @@ pub fn run(crate_data: &CrateData, report_path: Option<&std::path::Path>) {
 
     // 9. Detect panics.
     reports.extend(panic::detect_panics(crate_data));
+
+    // 10. Detect channel deadlocks and orphan senders.
+    let channel_callsites = channel::collect_channel_callsites(crate_data);
+    log::info!("Collected {} channel callsites", channel_callsites.len());
+    let (local_to_endpoint, channels, lifetimes) = channel::build_endpoint_map(crate_data, &channel_callsites);
+    reports.extend(channel::detect_channel_deadlocks(crate_data, &channel_callsites));
+    reports.extend(channel::detect_orphan_senders(crate_data, &channel_callsites, &local_to_endpoint, &channels, &lifetimes));
+    // MissingSend detection requires inter-procedural closure capture analysis; deferred to PR 2.
 
     if !reports.is_empty() {
         let j = serde_json::to_string_pretty(&reports).unwrap();
@@ -107,15 +116,30 @@ pub fn run(crate_data: &CrateData, report_path: Option<&std::path::Path>) {
         .iter()
         .filter(|r| matches!(r, report::Report::Panic(_)))
         .count();
+    let channel_deadlock = reports
+        .iter()
+        .filter(|r| matches!(r, report::Report::ChannelDeadlock(_)))
+        .count();
+    let orphan_sender = reports
+        .iter()
+        .filter(|r| matches!(r, report::Report::OrphanSender(_)))
+        .count();
+    let missing_send = reports
+        .iter()
+        .filter(|r| matches!(r, report::Report::MissingSend(_)))
+        .count();
 
     log::info!(
-        "Detection complete: {} doublelock(s), {} conflictlock(s), {} condvar_deadlock(s), {} atomicity(s), {} invalid_free(s), {} use_after_free(s), {} panic(s)",
+        "Detection complete: {} doublelock(s), {} conflictlock(s), {} condvar_deadlock(s), {} atomicity(s), {} invalid_free(s), {} use_after_free(s), {} panic(s), {} channel_deadlock(s), {} orphan_sender(s), {} missing_send(s)",
         doublelock,
         conflictlock,
         condvar_deadlock,
         atomicity,
         invalid_free,
         use_after_free,
-        panic_count
+        panic_count,
+        channel_deadlock,
+        orphan_sender,
+        missing_send
     );
 }

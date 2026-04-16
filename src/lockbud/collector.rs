@@ -51,11 +51,16 @@ impl<'a> LockGuardCollector<'a> {
             let mut move_sources: rustc_hash::FxHashMap<LocalId, Place> =
                 rustc_hash::FxHashMap::default();
 
-            // Helper: recursively resolve a place through move_sources and ref_places.
+            // Track Arc clones: clone local -> source place.
+            let mut arc_clones: rustc_hash::FxHashMap<LocalId, Place> =
+                rustc_hash::FxHashMap::default();
+
+            // Helper: recursively resolve a place through move_sources, ref_places, and arc_clones.
             fn resolve_place(
                 place: &Place,
                 move_sources: &rustc_hash::FxHashMap<LocalId, Place>,
                 ref_places: &rustc_hash::FxHashMap<LocalId, Place>,
+                arc_clones: &rustc_hash::FxHashMap<LocalId, Place>,
                 visited: &mut rustc_hash::FxHashSet<LocalId>,
             ) -> Place {
                 match &place.kind {
@@ -64,15 +69,18 @@ impl<'a> LockGuardCollector<'a> {
                             return place.clone();
                         }
                         if let Some(src) = move_sources.get(local) {
-                            return resolve_place(src, move_sources, ref_places, visited);
+                            return resolve_place(src, move_sources, ref_places, arc_clones, visited);
                         }
                         if let Some(src) = ref_places.get(local) {
-                            return resolve_place(src, move_sources, ref_places, visited);
+                            return resolve_place(src, move_sources, ref_places, arc_clones, visited);
+                        }
+                        if let Some(src) = arc_clones.get(local) {
+                            return resolve_place(src, move_sources, ref_places, arc_clones, visited);
                         }
                         place.clone()
                     }
                     PlaceKind::Projection(inner, elem) => {
-                        let resolved_inner = resolve_place(inner, move_sources, ref_places, visited);
+                        let resolved_inner = resolve_place(inner, move_sources, ref_places, arc_clones, visited);
                         Place {
                             kind: PlaceKind::Projection(Box::new(resolved_inner), elem.clone()),
                             ty: place.ty.clone(),
@@ -87,6 +95,7 @@ impl<'a> LockGuardCollector<'a> {
                 |arg: &Operand,
                  ref_places: &rustc_hash::FxHashMap<LocalId, Place>,
                  move_sources: &rustc_hash::FxHashMap<LocalId, Place>,
+                 arc_clones: &rustc_hash::FxHashMap<LocalId, Place>,
                  guard_containers: &rustc_hash::FxHashMap<LocalId, Place>,
                  lockguards: &LockGuardMap,
                  fun_id: FunDeclId|
@@ -94,18 +103,18 @@ impl<'a> LockGuardCollector<'a> {
                     match arg {
                         Operand::Copy(place) | Operand::Move(place) => {
                             let mut visited = rustc_hash::FxHashSet::default();
-                            let resolved = resolve_place(place, move_sources, ref_places, &mut visited);
+                            let resolved = resolve_place(place, move_sources, ref_places, arc_clones, &mut visited);
                             if let Some(local) = resolved.local_id() {
                                 if let Some(p) = guard_containers.get(&local) {
                                     let mut v2 = rustc_hash::FxHashSet::default();
-                                    return Some(resolve_place(p, move_sources, ref_places, &mut v2));
+                                    return Some(resolve_place(p, move_sources, ref_places, arc_clones, &mut v2));
                                 }
                                 if let Some(info) =
                                     lockguards.get(&LockGuardId::new(fun_id, local))
                                 {
                                     if let Some(ref rp) = info.receiver_place {
                                         let mut v2 = rustc_hash::FxHashSet::default();
-                                        return Some(resolve_place(rp, move_sources, ref_places, &mut v2));
+                                        return Some(resolve_place(rp, move_sources, ref_places, arc_clones, &mut v2));
                                     }
                                 }
                             }
@@ -141,9 +150,11 @@ impl<'a> LockGuardCollector<'a> {
                                 let guard_id = LockGuardId::new(fun_id, dest_local);
                                 // Do NOT treat a mere move/copy of an existing lockguard
                                 // as a new gen (e.g., temp copies for function arguments).
+                                let mut alias_src_local: Option<LocalId> = None;
                                 let is_alias = match rvalue {
                                     Rvalue::Use(Operand::Move(src) | Operand::Copy(src)) => {
                                         src.local_id().map(|src_local| {
+                                            alias_src_local = Some(src_local);
                                             self.lockguards.contains_key(&LockGuardId::new(
                                                 fun_id, src_local,
                                             ))
@@ -151,8 +162,17 @@ impl<'a> LockGuardCollector<'a> {
                                     }
                                     _ => false,
                                 };
-                                if !is_alias {
-                                    if let Some(info) = self.lockguards.get_mut(&guard_id) {
+                                let mut propagated_recv: Option<Place> = None;
+                                if is_alias {
+                                    if let Some(src_local) = alias_src_local {
+                                        let src_id = LockGuardId::new(fun_id, src_local);
+                                        if let Some(src_info) = self.lockguards.get(&src_id) {
+                                            propagated_recv = src_info.receiver_place.clone();
+                                        }
+                                    }
+                                }
+                                if let Some(info) = self.lockguards.get_mut(&guard_id) {
+                                    if !is_alias {
                                         // This is a gen location.
                                         info.gen_locs.push(loc);
                                         // Try to extract receiver if this is a lock() call.
@@ -162,6 +182,17 @@ impl<'a> LockGuardCollector<'a> {
                                         // Also try Ref receiver patterns.
                                         if let Rvalue::Ref { place, .. } = rvalue {
                                             info.receiver_place = Some(place.clone());
+                                        }
+                                    } else {
+                                        // Guard moved/copied to a new local: also track it as a
+                                        // gen so the analyzer knows it's alive here.
+                                        info.gen_locs.push(loc);
+                                        if let Some(rp) = propagated_recv {
+                                            info.receiver_place = Some(rp);
+                                        }
+                                        // Record alias relationship for the detector.
+                                        if let Some(src_local) = alias_src_local {
+                                            info.alias_of = Some(LockGuardId::new(fun_id, src_local));
                                         }
                                     }
                                 }
@@ -193,7 +224,7 @@ impl<'a> LockGuardCollector<'a> {
                     ullbc_ast::TerminatorKind::Call { call, .. } => {
                         // For is_lock_call, receiver is the first argument.
                         let lock_recv = call.args.first().and_then(|arg| {
-                            resolve_arg_place(arg, &ref_places, &move_sources, &guard_containers, &self.lockguards, fun_id)
+                            resolve_arg_place(arg, &ref_places, &move_sources, &arc_clones, &guard_containers, &self.lockguards, fun_id)
                         });
 
                         // For other calls, resolve receiver from arguments using containers/known-guards.
@@ -201,7 +232,7 @@ impl<'a> LockGuardCollector<'a> {
                             .args
                             .iter()
                             .filter_map(|arg| {
-                                resolve_arg_place(arg, &ref_places, &move_sources, &guard_containers, &self.lockguards, fun_id)
+                                resolve_arg_place(arg, &ref_places, &move_sources, &arc_clones, &guard_containers, &self.lockguards, fun_id)
                             })
                             .next();
 
@@ -218,6 +249,18 @@ impl<'a> LockGuardCollector<'a> {
                                 }
                             }
                         }
+
+                        // Track Arc clones so we can resolve aliasing receivers.
+                        if is_arc_clone_call(&call.func, krate) {
+                            if let Some(dest_local) = call.dest.local_id() {
+                                if let Some(arg) = call.args.first() {
+                                    if let Operand::Copy(place) | Operand::Move(place) = arg {
+                                        arc_clones.insert(dest_local, place.clone());
+                                    }
+                                }
+                            }
+                        }
+
                         let is_rec_read = is_read_recursive_call(&call.func, krate);
                         // Any call that returns a lockguard is also a gen.
                         if let Some(dest_local) = call.dest.local_id() {
@@ -249,14 +292,14 @@ impl<'a> LockGuardCollector<'a> {
                 }
             }
 
-            // Step 4: Resolve receiver places by following move/ref chains.
+            // Step 4: Resolve receiver places by following move/ref/clone chains.
             for (guard_id, info) in self.lockguards.iter_mut() {
                 if guard_id.fun_id != fun_id {
                     continue;
                 }
                 if let Some(ref rp) = info.receiver_place {
                     let mut visited = rustc_hash::FxHashSet::default();
-                    info.receiver_place = Some(resolve_place(rp, &move_sources, &ref_places, &mut visited));
+                    info.receiver_place = Some(resolve_place(rp, &move_sources, &ref_places, &arc_clones, &mut visited));
                 }
             }
         }
@@ -301,6 +344,26 @@ pub fn is_read_recursive_call(func: &FnOperand, krate: &TranslatedCrate) -> bool
                 if let Some(decl) = decl {
                     let name = format_name(&decl.item_meta.name);
                     name.contains("read_recursive")
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        },
+        FnOperand::Dynamic(_) => false,
+    }
+}
+
+pub fn is_arc_clone_call(func: &FnOperand, krate: &TranslatedCrate) -> bool {
+    match func {
+        FnOperand::Regular(fn_ptr) => match fn_ptr.kind.as_ref() {
+            FnPtrKind::Fun(FunId::Regular(fun_id)) => {
+                let decl = krate.fun_decls.get(*fun_id);
+                if let Some(decl) = decl {
+                    let name = format_name(&decl.item_meta.name);
+                    (name.contains("Arc") || name.contains("arc"))
+                        && name.contains("clone")
+                        && name.contains("Clone")
                 } else {
                     false
                 }

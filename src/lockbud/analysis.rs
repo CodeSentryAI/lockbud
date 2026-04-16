@@ -294,7 +294,9 @@ fn apply_gen_kill(
     if let Some(gset) = gen_set {
         for s in state.0.iter() {
             for g in gset.iter() {
-                relations.insert((*s, *g));
+                if s != g {
+                    relations.insert((*s, *g));
+                }
             }
         }
         for g in gset.iter() {

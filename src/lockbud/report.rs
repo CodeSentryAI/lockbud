@@ -10,6 +10,9 @@ pub enum Report {
     InvalidFree(ReportContent<InvalidFreeDiagnosis>),
     UseAfterFree(ReportContent<UseAfterFreeDiagnosis>),
     Panic(ReportContent<PanicDiagnosis>),
+    ChannelDeadlock(ReportContent<ChannelDeadlockDiagnosis>),
+    OrphanSender(ReportContent<OrphanSenderDiagnosis>),
+    MissingSend(ReportContent<MissingSendDiagnosis>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -137,4 +140,29 @@ pub struct PanicDiagnosis {
     pub fn_name: String,
     pub panic_api: String,
     pub callsite_span: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelDeadlockDiagnosis {
+    pub fn_name: String,
+    pub channel_type: String,
+    pub send_span: String,
+    pub recv_span: String,
+    pub explanation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrphanSenderDiagnosis {
+    pub fn_name: String,
+    pub channel_type: String,
+    pub receiver_recv_span: String,
+    pub explanation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MissingSendDiagnosis {
+    pub fn_name: String,
+    pub channel_type: String,
+    pub sender_span: String,
+    pub explanation: String,
 }

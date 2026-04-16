@@ -4,6 +4,7 @@ use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use petgraph::{Directed, Graph};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 
 use crate::lockbud::analysis::Analyzer;
 use crate::lockbud::callgraph::CallGraph;
@@ -54,6 +55,7 @@ impl<'a> DeadlockDetector<'a> {
             let (possibility, reason) = self.deadlock_possibility(a, b);
             match possibility {
                 DeadlockPossibility::Probably => {
+                    log::info!("phase1 Probably DL: {:?} -> {:?}", a, b);
                     let diagnosis = self.diagnose_relation(a, b);
                     reports.push(Report::DoubleLock(ReportContent::new(
                         "DoubleLock".to_string(),
@@ -64,14 +66,33 @@ impl<'a> DeadlockDetector<'a> {
                     )));
                 }
                 DeadlockPossibility::Possibly => {
-                    let diagnosis = self.diagnose_relation(a, b);
-                    reports.push(Report::DoubleLock(ReportContent::new(
-                        "DoubleLock".to_string(),
-                        format!("{:?}", possibility),
-                        diagnosis,
-                        "The first lock is not released when acquiring the second lock"
-                            .to_string(),
-                    )));
+                    // Cross-function relations where one side lacks receiver info
+                    // are often false positives from identity functions (e.g., wait()).
+                    // Defer them to cycle-based ConflictLock detection instead.
+                    let skip_as_fp = (|| {
+                        let a_i = self.lockguards.get(a)?;
+                        let b_i = self.lockguards.get(b)?;
+                        log::info!("Possibly DL: {:?} -> {:?} same_fun={} recv_a={:?} recv_b={:?} alias_a={:?} alias_b={:?} reason={:?}",
+                            a, b, a.fun_id == b.fun_id, a_i.receiver_place, b_i.receiver_place, a_i.alias_of, b_i.alias_of, reason);
+                        Some(
+                            a.fun_id != b.fun_id
+                                && (a_i.receiver_place.is_none() || b_i.receiver_place.is_none()),
+                        )
+                    })()
+                    .unwrap_or(false);
+                    if skip_as_fp {
+                        let node = conflict_graph.add_node((*a, *b));
+                        relation_to_node.insert((*a, *b), node);
+                    } else {
+                        let diagnosis = self.diagnose_relation(a, b);
+                        reports.push(Report::DoubleLock(ReportContent::new(
+                            "DoubleLock".to_string(),
+                            format!("{:?}", possibility),
+                            diagnosis,
+                            "The first lock is not released when acquiring the second lock"
+                                .to_string(),
+                        )));
+                    }
                 }
                 _ if reason != NotDeadlockReason::SameSpan => {
                     let node = conflict_graph.add_node((*a, *b));
@@ -87,12 +108,32 @@ impl<'a> DeadlockDetector<'a> {
                 if node1 == node2 {
                     continue; // skip self-loops
                 }
-                let (possibility, _) = self.deadlock_possibility(a, b);
+                let (possibility, reason) = self.deadlock_possibility(a, b);
                 if matches!(
                     possibility,
                     DeadlockPossibility::Probably | DeadlockPossibility::Possibly
                 ) {
+                    log::info!("conflict edge {:?} -> {:?} poss={:?} reason={:?}", a, b, possibility, reason);
                     conflict_graph.add_edge(*node1, *node2, possibility);
+                } else if reason == NotDeadlockReason::TrueDeadlock {
+                    // The types match but alias analysis says they are different instances.
+                    // If the two guards are in different thread contexts, assume they might
+                    // alias (e.g., Arc clones pointing to the same inner lock).
+                    let a_ty = match self.lockguards.get(a) {
+                        Some(i) => &i.lockguard_ty,
+                        None => continue,
+                    };
+                    let b_ty = match self.lockguards.get(b) {
+                        Some(i) => &i.lockguard_ty,
+                        None => continue,
+                    };
+                    let ty_possibility = a_ty.deadlock_with(b_ty);
+                    if matches!(ty_possibility, DeadlockPossibility::Probably | DeadlockPossibility::Possibly)
+                        && a.fun_id != b.fun_id
+                        && (self.is_thread_entry_point(a.fun_id) || self.is_thread_entry_point(b.fun_id))
+                    {
+                        conflict_graph.add_edge(*node1, *node2, DeadlockPossibility::Possibly);
+                    }
                 }
             }
         }
@@ -552,6 +593,53 @@ impl<'a> DeadlockDetector<'a> {
         }
     }
 
+    fn is_thread_entry_point(&self, fun_id: FunDeclId) -> bool {
+        let krate = &self.crate_data.translated;
+        let Some(decl) = krate.fun_decls.get(fun_id) else {
+            return false;
+        };
+        let name = format_name(&decl.item_meta.name);
+        // Closures passed to thread::spawn are named like ...::{closure#N}::inst
+        // and are reachable from std thread internals.
+        if !name.contains("{closure#") {
+            return false;
+        }
+        let mut visited = FxHashSet::default();
+        let mut queue = VecDeque::new();
+        queue.push_back(fun_id);
+        visited.insert(fun_id);
+        while let Some(node) = queue.pop_front() {
+            if let Some(preds) = self.callgraph.reverse_edges.get(&node) {
+                for &pred in preds {
+                    let pred_name = krate.fun_decls.get(pred).map(|d| format_name(&d.item_meta.name)).unwrap_or_default();
+                    if pred_name.contains("thread::spawn") || pred_name.contains("thread::lifecycle::spawn_unchecked") {
+                        return true;
+                    }
+                    if visited.insert(pred) {
+                        queue.push_back(pred);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Check if `guard` is a transitive alias (via move/copy chains) of `target`.
+    fn is_transitive_alias(&self, guard: &LockGuardId, target: &LockGuardId, visited: &mut FxHashSet<LockGuardId>) -> bool {
+        if guard == target {
+            return true;
+        }
+        if !visited.insert(*guard) {
+            return false;
+        }
+        if let Some(info) = self.lockguards.get(guard) {
+            if let Some(alias) = info.alias_of {
+                return self.is_transitive_alias(&alias, target, visited);
+            }
+        }
+        false
+    }
+
     fn deadlock_possibility(
         &self,
         a: &LockGuardId,
@@ -568,6 +656,22 @@ impl<'a> DeadlockDetector<'a> {
 
         // Same span heuristic: loops/recursion often cause same-span false positives.
         if a_info.span == b_info.span {
+            return (DeadlockPossibility::Unlikely, NotDeadlockReason::SameSpan);
+        }
+
+        // If one guard is a direct alias (move/copy) of the other, they represent
+        // the same lock acquisition and should not deadlock with each other.
+        if a_info.alias_of == Some(*b) || b_info.alias_of == Some(*a) {
+            return (DeadlockPossibility::Unlikely, NotDeadlockReason::SameSpan);
+        }
+
+        // If one guard is a direct or transitive alias of the other, they represent
+        // the same lock acquisition and should not deadlock with each other.
+        let mut visited_a = FxHashSet::default();
+        let mut visited_b = FxHashSet::default();
+        if self.is_transitive_alias(a, b, &mut visited_a)
+            || self.is_transitive_alias(b, a, &mut visited_b)
+        {
             return (DeadlockPossibility::Unlikely, NotDeadlockReason::SameSpan);
         }
 
@@ -596,9 +700,15 @@ impl<'a> DeadlockDetector<'a> {
         let alias = match (&a_info.receiver_place, &b_info.receiver_place) {
             (Some(ra), Some(rb)) if ra == rb => DeadlockPossibility::Probably,
             (Some(ra), Some(rb)) => {
-                // Two distinct locals without projection are definitely different objects.
                 match (&ra.kind, &rb.kind) {
                     (PlaceKind::Local(la), PlaceKind::Local(lb)) if la != lb => {
+                        DeadlockPossibility::Unlikely
+                    }
+                    (
+                        PlaceKind::Projection(inner_a, elem_a),
+                        PlaceKind::Projection(inner_b, elem_b),
+                    ) if inner_a == inner_b && elem_a != elem_b => {
+                        // Different fields of the same base object are definitely distinct.
                         DeadlockPossibility::Unlikely
                     }
                     _ => DeadlockPossibility::Possibly,
