@@ -2,6 +2,7 @@ use charon_lib::ast::*;
 use charon_lib::export::CrateData;
 use charon_lib::ullbc_ast;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 
 /// A simple callgraph over ULLBC.
 /// Nodes are FunDeclId; edges are directed from caller to callee.
@@ -77,6 +78,58 @@ impl CallGraph {
             .get(&fun_id)
             .into_iter()
             .flat_map(|s| s.iter().copied())
+    }
+
+    /// Returns true if `source` can reach `target` via call edges.
+    pub fn can_reach(&self, source: FunDeclId, target: FunDeclId) -> bool {
+        if source == target {
+            return true;
+        }
+        let mut visited = FxHashSet::default();
+        let mut queue = VecDeque::new();
+        queue.push_back(source);
+        visited.insert(source);
+        while let Some(node) = queue.pop_front() {
+            if let Some(nexts) = self.edges.get(&node) {
+                for &next in nexts {
+                    if next == target {
+                        return true;
+                    }
+                    if visited.insert(next) {
+                        queue.push_back(next);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Returns true if there exists a node that can reach both `a` and `b`.
+    pub fn share_common_ancestor(&self, a: FunDeclId, b: FunDeclId) -> bool {
+        if a == b {
+            return true;
+        }
+        // Reverse-reachable sets from a and b.
+        let rev_a = self.reverse_reachable(a);
+        let rev_b = self.reverse_reachable(b);
+        !rev_a.is_disjoint(&rev_b)
+    }
+
+    fn reverse_reachable(&self, start: FunDeclId) -> FxHashSet<FunDeclId> {
+        let mut visited = FxHashSet::default();
+        let mut queue = VecDeque::new();
+        queue.push_back(start);
+        visited.insert(start);
+        while let Some(node) = queue.pop_front() {
+            if let Some(preds) = self.reverse_edges.get(&node) {
+                for &pred in preds {
+                    if visited.insert(pred) {
+                        queue.push_back(pred);
+                    }
+                }
+            }
+        }
+        visited
     }
 
     /// Returns all simple paths from `source` to `target` up to a depth limit.

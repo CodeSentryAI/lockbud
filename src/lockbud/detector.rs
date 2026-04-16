@@ -217,15 +217,31 @@ impl<'a> DeadlockDetector<'a> {
         for (wait_key, (condvar_ref1, mutex_guard1)) in std_wait.iter() {
             for (notify_key, condvar_ref2) in std_notify.iter() {
                 if condvar_ref1 == condvar_ref2 {
-                    if let Some(report) = self.check_condvar_pair(
-                        *wait_key,
-                        *notify_key,
-                        mutex_guard1,
-                        true,
-                        &std_wait,
-                        &std_notify,
-                    ) {
-                        reports.push(report);
+                    let wait_fun = wait_key.0;
+                    let notify_fun = notify_key.0;
+                    if wait_fun == notify_fun {
+                        if let Some(report) = self.check_condvar_pair(
+                            *wait_key,
+                            *notify_key,
+                            mutex_guard1,
+                            true,
+                            &std_wait,
+                            &std_notify,
+                        ) {
+                            reports.push(report);
+                        }
+                    } else if self.callgraph.can_reach(wait_fun, notify_fun)
+                        || self.callgraph.can_reach(notify_fun, wait_fun)
+                        || self.callgraph.share_common_ancestor(wait_fun, notify_fun)
+                    {
+                        if let Some(report) = self.check_condvar_pair_interproc(
+                            *wait_key,
+                            *notify_key,
+                            mutex_guard1,
+                            true,
+                        ) {
+                            reports.push(report);
+                        }
                     }
                 }
             }
@@ -235,15 +251,31 @@ impl<'a> DeadlockDetector<'a> {
         for (wait_key, (condvar_ref1, mutex_guard_ref1)) in parking_lot_wait.iter() {
             for (notify_key, condvar_ref2) in parking_lot_notify.iter() {
                 if condvar_ref1 == condvar_ref2 {
-                    if let Some(report) = self.check_condvar_pair(
-                        *wait_key,
-                        *notify_key,
-                        mutex_guard_ref1,
-                        false,
-                        &parking_lot_wait,
-                        &parking_lot_notify,
-                    ) {
-                        reports.push(report);
+                    let wait_fun = wait_key.0;
+                    let notify_fun = notify_key.0;
+                    if wait_fun == notify_fun {
+                        if let Some(report) = self.check_condvar_pair(
+                            *wait_key,
+                            *notify_key,
+                            mutex_guard_ref1,
+                            false,
+                            &parking_lot_wait,
+                            &parking_lot_notify,
+                        ) {
+                            reports.push(report);
+                        }
+                    } else if self.callgraph.can_reach(wait_fun, notify_fun)
+                        || self.callgraph.can_reach(notify_fun, wait_fun)
+                        || self.callgraph.share_common_ancestor(wait_fun, notify_fun)
+                    {
+                        if let Some(report) = self.check_condvar_pair_interproc(
+                            *wait_key,
+                            *notify_key,
+                            mutex_guard_ref1,
+                            false,
+                        ) {
+                            reports.push(report);
+                        }
                     }
                 }
             }
@@ -341,6 +373,97 @@ impl<'a> DeadlockDetector<'a> {
                         _ => false,
                     }
                 }
+                _ => false,
+            };
+            if !aliases_mutex {
+                no_mutex_guards.push((g1, g2));
+            }
+        }
+
+        if no_mutex_guards.is_empty() {
+            return None;
+        }
+
+        let diagnosis =
+            self.diagnose_condvar_deadlock(wait_key, notify_key, is_std_condvar, &no_mutex_guards);
+        Some(Report::CondvarDeadlock(ReportContent::new(
+            "CondvarDeadlock".to_string(),
+            "Possibly".to_string(),
+            diagnosis,
+            "The same lock before Condvar::wait and notify".to_string(),
+        )))
+    }
+
+    /// Inter-procedural variant of check_condvar_pair that unions the callsite states
+    /// with the propagated function entry contexts.
+    fn check_condvar_pair_interproc(
+        &self,
+        wait_key: (FunDeclId, Location, FunDeclId),
+        notify_key: (FunDeclId, Location, FunDeclId),
+        mutex_guard_place: &Place,
+        is_std_condvar: bool,
+    ) -> Option<Report> {
+        let (wait_fun, _, _) = wait_key;
+        let (notify_fun, _, _) = notify_key;
+
+        let mut live1 = self
+            .analyzer
+            .condvar_callsite_states
+            .get(&wait_key)
+            .cloned()
+            .unwrap_or_default();
+        let mut live2 = self
+            .analyzer
+            .condvar_callsite_states
+            .get(&notify_key)
+            .cloned()
+            .unwrap_or_default();
+
+        // Union with the propagated function entry contexts.
+        if let Some(ctx) = self.analyzer.contexts.get(&wait_fun) {
+            live1.union(ctx);
+        }
+        if let Some(ctx) = self.analyzer.contexts.get(&notify_fun) {
+            live2.union(ctx);
+        }
+
+        let live1_ids: Vec<_> = live1.0.iter().copied().collect();
+        let live2_ids: Vec<_> = live2.0.iter().copied().collect();
+
+        let mut aliased_pairs = Vec::new();
+        for g1 in &live1_ids {
+            for g2 in &live2_ids {
+                let info1 = match self.lockguards.get(g1) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let info2 = match self.lockguards.get(g2) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let alias = match (&info1.receiver_place, &info2.receiver_place) {
+                    (Some(r1), Some(r2)) if r1 == r2 => true,
+                    _ => false,
+                };
+                if !alias {
+                    continue;
+                }
+                let (possibility, _) = self.deadlock_possibility(g1, g2);
+                if possibility > DeadlockPossibility::Unlikely {
+                    aliased_pairs.push((g1, g2));
+                }
+            }
+        }
+
+        // Filter out pairs where g1 aliases with the mutex guard passed to wait.
+        let mut no_mutex_guards = Vec::new();
+        for (g1, g2) in aliased_pairs {
+            let g1_info = self.lockguards.get(g1).unwrap();
+            let aliases_mutex = match (&g1_info.receiver_place, mutex_guard_place.local_id()) {
+                (Some(rp), Some(mg_local)) => match &rp.kind {
+                    PlaceKind::Local(l) if *l == mg_local => true,
+                    _ => false,
+                },
                 _ => false,
             };
             if !aliases_mutex {

@@ -1,10 +1,13 @@
 //! Lockbud detector ported to analyze ULLBC directly via charon-lib.
 
 pub mod analysis;
+pub mod atomic;
 pub mod callgraph;
 pub mod collector;
 pub mod condvar;
 pub mod detector;
+pub mod memory;
+pub mod panic;
 pub mod report;
 pub mod types;
 
@@ -45,8 +48,24 @@ pub fn run(crate_data: &CrateData, report_path: Option<&std::path::Path>) {
     }
 
     // 5. Detect deadlocks.
-    let detector = detector::DeadlockDetector::new(crate_data, &callgraph, &lockguards, &analyzer, &condvar_callsites);
-    let reports = detector.detect();
+    let deadlock_detector = detector::DeadlockDetector::new(crate_data, &callgraph, &lockguards, &analyzer, &condvar_callsites);
+    let mut reports = deadlock_detector.detect();
+
+    // 6. Detect atomicity violations.
+    let atomic_callsites = atomic::collect_atomic_callsites(crate_data);
+    log::info!("Collected {} atomic callsites", atomic_callsites.len());
+    reports.extend(atomic::detect_atomicity_violations(crate_data, &atomic_callsites, &callgraph));
+
+    // 7. Detect invalid free.
+    let uninit_callsites = memory::collect_uninit_callsites(crate_data);
+    log::info!("Collected {} uninit callsites", uninit_callsites.len());
+    reports.extend(memory::detect_invalid_free(crate_data, &uninit_callsites));
+
+    // 8. Detect use after free.
+    reports.extend(memory::detect_use_after_free(crate_data));
+
+    // 9. Detect panics.
+    reports.extend(panic::detect_panics(crate_data));
 
     if !reports.is_empty() {
         let j = serde_json::to_string_pretty(&reports).unwrap();
@@ -72,11 +91,31 @@ pub fn run(crate_data: &CrateData, report_path: Option<&std::path::Path>) {
         .iter()
         .filter(|r| matches!(r, report::Report::CondvarDeadlock(_)))
         .count();
+    let atomicity = reports
+        .iter()
+        .filter(|r| matches!(r, report::Report::AtomicityViolation(_)))
+        .count();
+    let invalid_free = reports
+        .iter()
+        .filter(|r| matches!(r, report::Report::InvalidFree(_)))
+        .count();
+    let use_after_free = reports
+        .iter()
+        .filter(|r| matches!(r, report::Report::UseAfterFree(_)))
+        .count();
+    let panic_count = reports
+        .iter()
+        .filter(|r| matches!(r, report::Report::Panic(_)))
+        .count();
 
     log::info!(
-        "Detection complete: {} doublelock(s), {} conflictlock(s), {} condvar_deadlock(s)",
+        "Detection complete: {} doublelock(s), {} conflictlock(s), {} condvar_deadlock(s), {} atomicity(s), {} invalid_free(s), {} use_after_free(s), {} panic(s)",
         doublelock,
         conflictlock,
-        condvar_deadlock
+        condvar_deadlock,
+        atomicity,
+        invalid_free,
+        use_after_free,
+        panic_count
     );
 }

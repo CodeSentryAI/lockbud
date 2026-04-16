@@ -6,6 +6,10 @@ pub enum Report {
     DoubleLock(ReportContent<DeadlockDiagnosis>),
     ConflictLock(ReportContent<Vec<DeadlockDiagnosis>>),
     CondvarDeadlock(ReportContent<CondvarDeadlockDiagnosis>),
+    AtomicityViolation(ReportContent<AtomicityViolationDiagnosis>),
+    InvalidFree(ReportContent<InvalidFreeDiagnosis>),
+    UseAfterFree(ReportContent<UseAfterFreeDiagnosis>),
+    Panic(ReportContent<PanicDiagnosis>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,4 +107,34 @@ impl CondvarDeadlockDiagnosis {
             deadlocks,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AtomicityViolationDiagnosis {
+    pub fn_name: String,
+    pub atomic_reader: String,
+    pub atomic_writer: String,
+    pub dep_kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InvalidFreeDiagnosis {
+    pub ty: String,
+    pub uninit_span: String,
+    pub assume_init_span: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UseAfterFreeDiagnosis {
+    pub raw_ptr_local: usize,
+    pub use_span: String,
+    pub drop_span: String,
+    pub explanation: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PanicDiagnosis {
+    pub fn_name: String,
+    pub panic_api: String,
+    pub callsite_span: String,
 }
