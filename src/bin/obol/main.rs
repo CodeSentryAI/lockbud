@@ -5,11 +5,8 @@
 use anyhow::Result;
 use clap::Parser;
 use obol_lib::args::{CliOpts, OBOL_ARGS, ObolCli};
+use obol_lib::toolchain;
 use std::{env, process::ExitStatus};
-
-use crate::toolchain::toolchain_path;
-
-mod toolchain;
 
 fn main() -> Result<()> {
     let opts = ObolCli::parse();
@@ -18,7 +15,7 @@ fn main() -> Result<()> {
         ObolCli::Rustc(opts) => translate_without_cargo(opts)?,
         ObolCli::Cargo(opts) => translate_with_cargo(opts)?,
         ObolCli::ToolchainPath => {
-            let path = toolchain_path()?;
+            let path = toolchain::toolchain_path()?;
             println!("{}", path.display());
             ExitStatus::default()
         }
@@ -45,7 +42,7 @@ fn translate_with_cargo(mut options: CliOpts) -> Result<ExitStatus> {
     cmd.env("OBOL_USING_CARGO", "1");
     cmd.env_remove("CARGO_PRIMARY_PACKAGE");
     if cfg!(target_os = "macos") {
-        let mut lib = toolchain_path()?;
+        let mut lib = toolchain::toolchain_path()?;
         lib.push("lib");
         cmd.env("DYLD_LIBRARY_PATH", lib);
     }

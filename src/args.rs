@@ -49,11 +49,6 @@ pub struct CliOpts {
         help = "List of item names to keep opaque during translation"
     )]
     pub opaque: Vec<String>,
-    #[clap(
-        long = "report-file",
-        help = "Path to write Lockbud JSON reports (ULLBC driver only)"
-    )]
-    pub report_file: Option<PathBuf>,
     /// Args that are passed to the underlying tool (`rustc` or `cargo` depending on `--cargo`).
     #[arg(last = true)]
     pub spread: Vec<String>,

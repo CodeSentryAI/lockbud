@@ -14,6 +14,7 @@ extern crate rustc_session;
 pub mod args;
 pub mod driver;
 pub mod lockbud;
+pub mod toolchain;
 pub mod translate;
 
 #[derive(Debug)]

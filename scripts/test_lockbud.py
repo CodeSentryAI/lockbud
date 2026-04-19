@@ -20,9 +20,41 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Auto-detect OBOL_DIR from the script's location (scripts/test_lockbud.py -> repo root).
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_AUTO_OBOL_DIR = _SCRIPT_DIR.parent
+
 LOCKBUD_DIR = Path(os.environ.get("LOCKBUD_DIR", Path.home() / "lockbud"))
-OBOL_DIR = Path(os.environ.get("OBOL_DIR", Path.home() / "obol"))
+OBOL_DIR = Path(os.environ.get("OBOL_DIR", _AUTO_OBOL_DIR))
+TOOLCHAIN = "nightly-2026-02-07"
 TOYS_DIR = LOCKBUD_DIR / "toys"
+
+_LOCKBUD_BIN = OBOL_DIR / "target" / "debug" / "lockbud"
+
+
+def _ensure_lockbud_bin():
+    if not _LOCKBUD_BIN.exists():
+        print(f"ERROR: lockbud binary not found at {_LOCKBUD_BIN}")
+        print(f"  OBOL_DIR={OBOL_DIR}")
+        print("  Build with: cargo build --bin lockbud")
+        print("  Or set OBOL_DIR env var to the repo root.")
+        sys.exit(1)
+
+
+def _run_lockbud(cwd: Path, report_path: Path, kind: str, env: dict):
+    """Run the lockbud binary and return the subprocess result."""
+    result = subprocess.run(
+        ["rustup", "run", TOOLCHAIN, str(_LOCKBUD_BIN), "-k", kind, "--report-file", str(report_path), "--", "--target", "x86_64-unknown-linux-gnu"],
+        cwd=cwd, env=env, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"  WARNING: lockbud exited with code {result.returncode}")
+        if result.stderr:
+            # Print last few lines of stderr for diagnostics
+            lines = result.stderr.strip().splitlines()
+            for line in lines[-10:]:
+                print(f"    {line}")
+    return result
 
 DEADLOCK_TOYS = [
     "inter",
@@ -56,10 +88,9 @@ def run_original(toy_dir: Path):
 
 
 def run_ullbc(toy_dir: Path):
+    _ensure_lockbud_bin()
     env = os.environ.copy()
-    env["RUSTC_WRAPPER"] = str(OBOL_DIR / "target" / "debug" / "lockbud-ullbc-driver")
     env["RUST_LOG"] = "warn"
-    env["OBOL_USING_CARGO"] = "1"
     env.pop("LD_LIBRARY_PATH", None)
     subprocess.run(
         ["cargo", "clean"],
@@ -70,13 +101,8 @@ def run_ullbc(toy_dir: Path):
     toolchain_path.write_text(obol_toolchain)
     report_path = toy_dir / f"{toy_dir.name}.lockbud.json"
     report_path.unlink(missing_ok=True)
-    opts = {"report_file": str(report_path)}
-    env["OBOL_ARGS"] = json.dumps(opts)
     try:
-        result = subprocess.run(
-            ["cargo", "build", "--target", "x86_64-unknown-linux-gnu"],
-            cwd=toy_dir, env=env, capture_output=True, text=True,
-        )
+        _run_lockbud(toy_dir, report_path, "deadlock", env)
     finally:
         toolchain_path.unlink(missing_ok=True)
 
@@ -112,20 +138,29 @@ def run_deadlock_benchmarks():
     return all_match
 
 
+def _setup_crate(tmp: str, name: str, cargo_toml: str, main_rs: str) -> Path:
+    crate_dir = Path(tmp) / name
+    crate_dir.mkdir()
+    (crate_dir / "Cargo.toml").write_text(cargo_toml)
+    src_dir = crate_dir / "src"
+    src_dir.mkdir()
+    (src_dir / "main.rs").write_text(main_rs)
+    (crate_dir / "rust-toolchain.toml").write_text(
+        (OBOL_DIR / "rust-toolchain.toml").read_text()
+    )
+    return crate_dir
+
+
 def run_condvar_smoke_tests():
+    _ensure_lockbud_bin()
     passed = 0
     failed = 0
 
     # ---- Test 1: std::sync::Condvar with extra lock (should report) ----
     with tempfile.TemporaryDirectory() as tmp:
-        crate_dir = Path(tmp) / "condvar_std_test"
-        crate_dir.mkdir()
-        (crate_dir / "Cargo.toml").write_text(
-            '[package]\nname = "condvar_std_test"\nversion = "0.1.0"\nedition = "2021"\n'
-        )
-        src_dir = crate_dir / "src"
-        src_dir.mkdir()
-        (src_dir / "main.rs").write_text(
+        crate_dir = _setup_crate(
+            tmp, "condvar_std_test",
+            '[package]\nname = "condvar_std_test"\nversion = "0.1.0"\nedition = "2021"\n',
             '''
 use std::sync::{Arc, Condvar, Mutex};
 fn same_function(pair: Arc<((Mutex<bool>, Condvar), Mutex<i32>)>) {
@@ -146,20 +181,11 @@ fn main() {
 '''
         )
         env = os.environ.copy()
-        env["RUSTC_WRAPPER"] = str(OBOL_DIR / "target" / "debug" / "lockbud-ullbc-driver")
         env["RUST_LOG"] = "warn"
-        env["OBOL_USING_CARGO"] = "1"
         env.pop("LD_LIBRARY_PATH", None)
-        (crate_dir / "rust-toolchain.toml").write_text(
-            (OBOL_DIR / "rust-toolchain.toml").read_text()
-        )
         report_path = crate_dir / "report.json"
         report_path.unlink(missing_ok=True)
-        env["OBOL_ARGS"] = json.dumps({"report_file": str(report_path)})
-        subprocess.run(
-            ["cargo", "build", "--target", "x86_64-unknown-linux-gnu"],
-            cwd=crate_dir, env=env, capture_output=True, text=True,
-        )
+        _run_lockbud(crate_dir, report_path, "deadlock", env)
 
         has_cd = False
         if report_path.exists():
@@ -176,14 +202,9 @@ fn main() {
 
     # ---- Test 2: std::sync::Condvar without extra lock (should NOT report) ----
     with tempfile.TemporaryDirectory() as tmp:
-        crate_dir = Path(tmp) / "condvar_std_ok"
-        crate_dir.mkdir()
-        (crate_dir / "Cargo.toml").write_text(
-            '[package]\nname = "condvar_std_ok"\nversion = "0.1.0"\nedition = "2021"\n'
-        )
-        src_dir = crate_dir / "src"
-        src_dir.mkdir()
-        (src_dir / "main.rs").write_text(
+        crate_dir = _setup_crate(
+            tmp, "condvar_std_ok",
+            '[package]\nname = "condvar_std_ok"\nversion = "0.1.0"\nedition = "2021"\n',
             '''
 use std::sync::{Arc, Condvar, Mutex};
 fn worker(pair: Arc<(Mutex<bool>, Condvar)>) {
@@ -204,20 +225,11 @@ fn main() {
 '''
         )
         env = os.environ.copy()
-        env["RUSTC_WRAPPER"] = str(OBOL_DIR / "target" / "debug" / "lockbud-ullbc-driver")
         env["RUST_LOG"] = "warn"
-        env["OBOL_USING_CARGO"] = "1"
         env.pop("LD_LIBRARY_PATH", None)
-        (crate_dir / "rust-toolchain.toml").write_text(
-            (OBOL_DIR / "rust-toolchain.toml").read_text()
-        )
         report_path = crate_dir / "report.json"
         report_path.unlink(missing_ok=True)
-        env["OBOL_ARGS"] = json.dumps({"report_file": str(report_path)})
-        subprocess.run(
-            ["cargo", "build", "--target", "x86_64-unknown-linux-gnu"],
-            cwd=crate_dir, env=env, capture_output=True, text=True,
-        )
+        _run_lockbud(crate_dir, report_path, "deadlock", env)
 
         has_cd = False
         if report_path.exists():
@@ -235,14 +247,9 @@ fn main() {
 
     # ---- Test 3: parking_lot::Condvar with extra lock (should report) ----
     with tempfile.TemporaryDirectory() as tmp:
-        crate_dir = Path(tmp) / "condvar_pl_test"
-        crate_dir.mkdir()
-        (crate_dir / "Cargo.toml").write_text(
-            '[package]\nname = "condvar_pl_test"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nparking_lot = "0.12"\n'
-        )
-        src_dir = crate_dir / "src"
-        src_dir.mkdir()
-        (src_dir / "main.rs").write_text(
+        crate_dir = _setup_crate(
+            tmp, "condvar_pl_test",
+            '[package]\nname = "condvar_pl_test"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nparking_lot = "0.12"\n',
             '''
 use parking_lot::{Condvar, Mutex};
 use std::sync::Arc;
@@ -264,20 +271,11 @@ fn main() {
 '''
         )
         env = os.environ.copy()
-        env["RUSTC_WRAPPER"] = str(OBOL_DIR / "target" / "debug" / "lockbud-ullbc-driver")
         env["RUST_LOG"] = "warn"
-        env["OBOL_USING_CARGO"] = "1"
         env.pop("LD_LIBRARY_PATH", None)
-        (crate_dir / "rust-toolchain.toml").write_text(
-            (OBOL_DIR / "rust-toolchain.toml").read_text()
-        )
         report_path = crate_dir / "report.json"
         report_path.unlink(missing_ok=True)
-        env["OBOL_ARGS"] = json.dumps({"report_file": str(report_path)})
-        subprocess.run(
-            ["cargo", "build", "--target", "x86_64-unknown-linux-gnu"],
-            cwd=crate_dir, env=env, capture_output=True, text=True,
-        )
+        _run_lockbud(crate_dir, report_path, "deadlock", env)
 
         has_cd = False
         if report_path.exists():
@@ -294,14 +292,9 @@ fn main() {
 
     # ---- Test 4: parking_lot::Condvar without extra lock (should NOT report) ----
     with tempfile.TemporaryDirectory() as tmp:
-        crate_dir = Path(tmp) / "condvar_pl_ok"
-        crate_dir.mkdir()
-        (crate_dir / "Cargo.toml").write_text(
-            '[package]\nname = "condvar_pl_ok"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nparking_lot = "0.12"\n'
-        )
-        src_dir = crate_dir / "src"
-        src_dir.mkdir()
-        (src_dir / "main.rs").write_text(
+        crate_dir = _setup_crate(
+            tmp, "condvar_pl_ok",
+            '[package]\nname = "condvar_pl_ok"\nversion = "0.1.0"\nedition = "2021"\n\n[dependencies]\nparking_lot = "0.12"\n',
             '''
 use parking_lot::{Condvar, Mutex};
 use std::sync::Arc;
@@ -323,20 +316,11 @@ fn main() {
 '''
         )
         env = os.environ.copy()
-        env["RUSTC_WRAPPER"] = str(OBOL_DIR / "target" / "debug" / "lockbud-ullbc-driver")
         env["RUST_LOG"] = "warn"
-        env["OBOL_USING_CARGO"] = "1"
         env.pop("LD_LIBRARY_PATH", None)
-        (crate_dir / "rust-toolchain.toml").write_text(
-            (OBOL_DIR / "rust-toolchain.toml").read_text()
-        )
         report_path = crate_dir / "report.json"
         report_path.unlink(missing_ok=True)
-        env["OBOL_ARGS"] = json.dumps({"report_file": str(report_path)})
-        subprocess.run(
-            ["cargo", "build", "--target", "x86_64-unknown-linux-gnu"],
-            cwd=crate_dir, env=env, capture_output=True, text=True,
-        )
+        _run_lockbud(crate_dir, report_path, "deadlock", env)
 
         has_cd = False
         if report_path.exists():
@@ -357,19 +341,15 @@ fn main() {
 
 
 def run_additional_smoke_tests():
+    _ensure_lockbud_bin()
     passed = 0
     failed = 0
 
     # ---- Atomicity Violation test ----
     with tempfile.TemporaryDirectory() as tmp:
-        crate_dir = Path(tmp) / "atomic_test"
-        crate_dir.mkdir()
-        (crate_dir / "Cargo.toml").write_text(
-            '[package]\nname = "atomic_test"\nversion = "0.1.0"\nedition = "2021"\n'
-        )
-        src_dir = crate_dir / "src"
-        src_dir.mkdir()
-        (src_dir / "main.rs").write_text(
+        crate_dir = _setup_crate(
+            tmp, "atomic_test",
+            '[package]\nname = "atomic_test"\nversion = "0.1.0"\nedition = "2021"\n',
             '''
 use std::sync::atomic::{AtomicUsize, Ordering};
 fn check_and_set(atomic: &AtomicUsize) {
@@ -385,20 +365,11 @@ fn main() {
 '''
         )
         env = os.environ.copy()
-        env["RUSTC_WRAPPER"] = str(OBOL_DIR / "target" / "debug" / "lockbud-ullbc-driver")
         env["RUST_LOG"] = "warn"
-        env["OBOL_USING_CARGO"] = "1"
         env.pop("LD_LIBRARY_PATH", None)
-        (crate_dir / "rust-toolchain.toml").write_text(
-            (OBOL_DIR / "rust-toolchain.toml").read_text()
-        )
         report_path = crate_dir / "report.json"
         report_path.unlink(missing_ok=True)
-        env["OBOL_ARGS"] = json.dumps({"report_file": str(report_path)})
-        subprocess.run(
-            ["cargo", "build", "--target", "x86_64-unknown-linux-gnu"],
-            cwd=crate_dir, env=env, capture_output=True, text=True,
-        )
+        _run_lockbud(crate_dir, report_path, "atomicity_violation", env)
 
         has_av = False
         if report_path.exists():
@@ -415,14 +386,9 @@ fn main() {
 
     # ---- InvalidFree test ----
     with tempfile.TemporaryDirectory() as tmp:
-        crate_dir = Path(tmp) / "invalid_free_test"
-        crate_dir.mkdir()
-        (crate_dir / "Cargo.toml").write_text(
-            '[package]\nname = "invalid_free_test"\nversion = "0.1.0"\nedition = "2021"\n'
-        )
-        src_dir = crate_dir / "src"
-        src_dir.mkdir()
-        (src_dir / "main.rs").write_text(
+        crate_dir = _setup_crate(
+            tmp, "invalid_free_test",
+            '[package]\nname = "invalid_free_test"\nversion = "0.1.0"\nedition = "2021"\n',
             '''
 use std::mem;
 fn bad() {
@@ -436,20 +402,11 @@ fn main() {
 '''
         )
         env = os.environ.copy()
-        env["RUSTC_WRAPPER"] = str(OBOL_DIR / "target" / "debug" / "lockbud-ullbc-driver")
         env["RUST_LOG"] = "warn"
-        env["OBOL_USING_CARGO"] = "1"
         env.pop("LD_LIBRARY_PATH", None)
-        (crate_dir / "rust-toolchain.toml").write_text(
-            (OBOL_DIR / "rust-toolchain.toml").read_text()
-        )
         report_path = crate_dir / "report.json"
         report_path.unlink(missing_ok=True)
-        env["OBOL_ARGS"] = json.dumps({"report_file": str(report_path)})
-        subprocess.run(
-            ["cargo", "build", "--target", "x86_64-unknown-linux-gnu"],
-            cwd=crate_dir, env=env, capture_output=True, text=True,
-        )
+        _run_lockbud(crate_dir, report_path, "memory", env)
 
         has_if = False
         if report_path.exists():
@@ -466,14 +423,9 @@ fn main() {
 
     # ---- Panic test ----
     with tempfile.TemporaryDirectory() as tmp:
-        crate_dir = Path(tmp) / "panic_test"
-        crate_dir.mkdir()
-        (crate_dir / "Cargo.toml").write_text(
-            '[package]\nname = "panic_test"\nversion = "0.1.0"\nedition = "2021"\n'
-        )
-        src_dir = crate_dir / "src"
-        src_dir.mkdir()
-        (src_dir / "main.rs").write_text(
+        crate_dir = _setup_crate(
+            tmp, "panic_test",
+            '[package]\nname = "panic_test"\nversion = "0.1.0"\nedition = "2021"\n',
             '''
 fn main() {
     let _ = Some(1).unwrap();
@@ -481,20 +433,11 @@ fn main() {
 '''
         )
         env = os.environ.copy()
-        env["RUSTC_WRAPPER"] = str(OBOL_DIR / "target" / "debug" / "lockbud-ullbc-driver")
         env["RUST_LOG"] = "warn"
-        env["OBOL_USING_CARGO"] = "1"
         env.pop("LD_LIBRARY_PATH", None)
-        (crate_dir / "rust-toolchain.toml").write_text(
-            (OBOL_DIR / "rust-toolchain.toml").read_text()
-        )
         report_path = crate_dir / "report.json"
         report_path.unlink(missing_ok=True)
-        env["OBOL_ARGS"] = json.dumps({"report_file": str(report_path)})
-        subprocess.run(
-            ["cargo", "build", "--target", "x86_64-unknown-linux-gnu"],
-            cwd=crate_dir, env=env, capture_output=True, text=True,
-        )
+        _run_lockbud(crate_dir, report_path, "panic", env)
 
         has_panic = False
         if report_path.exists():
@@ -511,14 +454,9 @@ fn main() {
 
     # ---- UseAfterFree test ----
     with tempfile.TemporaryDirectory() as tmp:
-        crate_dir = Path(tmp) / "uaf_test"
-        crate_dir.mkdir()
-        (crate_dir / "Cargo.toml").write_text(
-            '[package]\nname = "uaf_test"\nversion = "0.1.0"\nedition = "2021"\n'
-        )
-        src_dir = crate_dir / "src"
-        src_dir.mkdir()
-        (src_dir / "main.rs").write_text(
+        crate_dir = _setup_crate(
+            tmp, "uaf_test",
+            '[package]\nname = "uaf_test"\nversion = "0.1.0"\nedition = "2021"\n',
             '''
 fn consume(_: *mut String) {}
 
@@ -537,20 +475,11 @@ fn main() {
 '''
         )
         env = os.environ.copy()
-        env["RUSTC_WRAPPER"] = str(OBOL_DIR / "target" / "debug" / "lockbud-ullbc-driver")
         env["RUST_LOG"] = "warn"
-        env["OBOL_USING_CARGO"] = "1"
         env.pop("LD_LIBRARY_PATH", None)
-        (crate_dir / "rust-toolchain.toml").write_text(
-            (OBOL_DIR / "rust-toolchain.toml").read_text()
-        )
         report_path = crate_dir / "report.json"
         report_path.unlink(missing_ok=True)
-        env["OBOL_ARGS"] = json.dumps({"report_file": str(report_path)})
-        subprocess.run(
-            ["cargo", "build", "--target", "x86_64-unknown-linux-gnu"],
-            cwd=crate_dir, env=env, capture_output=True, text=True,
-        )
+        _run_lockbud(crate_dir, report_path, "memory", env)
 
         has_uaf = False
         if report_path.exists():

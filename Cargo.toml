@@ -30,6 +30,10 @@ path = "src/bin/obol/main.rs"
 name = "obol-driver"
 path = "src/bin/obol-driver/main.rs"
 
+[[bin]]
+name = "lockbud"
+path = "src/bin/lockbud/main.rs"
+
 [lib]
 name = "obol_lib"
 path = "src/lib.rs"
