@@ -8,6 +8,7 @@ pub mod collector;
 pub mod condvar;
 pub mod config;
 pub mod detector;
+pub mod engine;
 pub mod memory;
 pub mod panic;
 pub mod report;
@@ -45,9 +46,9 @@ pub fn run(crate_data: &CrateData, config: &LockbudConfig) {
 
         log::info!(
             "Collected {} lockguard relations",
-            analyzer.relations.len()
+            analyzer.relations().len()
         );
-        for (a, b) in &analyzer.relations {
+        for (a, b) in analyzer.relations() {
             log::info!("  relation {:?} -> {:?}", a, b);
         }
 

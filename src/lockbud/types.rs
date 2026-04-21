@@ -1,6 +1,9 @@
 use charon_lib::ast::*;
-use rustc_hash::FxHashSet;
 use std::cmp::Ordering;
+
+use crate::lockbud::engine::DataflowEntity;
+
+impl DataflowEntity for LockGuardId {}
 
 /// Uniquely identify a LockGuard in a crate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -262,36 +265,5 @@ impl LockGuardInfo {
 
 pub type LockGuardMap = std::collections::HashMap<LockGuardId, LockGuardInfo>;
 
-/// Set of live lockguards.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LiveLockGuards(pub FxHashSet<LockGuardId>);
-
-impl LiveLockGuards {
-    pub fn new() -> Self {
-        Self(FxHashSet::default())
-    }
-    pub fn insert(&mut self, id: LockGuardId) -> bool {
-        self.0.insert(id)
-    }
-    pub fn remove(&mut self, id: &LockGuardId) -> bool {
-        self.0.remove(id)
-    }
-    pub fn union(&mut self, other: &Self) -> bool {
-        let old_len = self.0.len();
-        self.0.extend(&other.0);
-        old_len != self.0.len()
-    }
-    pub fn difference(&mut self, other: &Self) -> bool {
-        let old_len = self.0.len();
-        for id in &other.0 {
-            self.0.remove(id);
-        }
-        old_len != self.0.len()
-    }
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-    pub fn iter(&self) -> impl Iterator<Item = &LockGuardId> {
-        self.0.iter()
-    }
-}
+/// Set of live lockguards. Alias for the generic `LiveSet`.
+pub type LiveLockGuards = crate::lockbud::engine::LiveSet<LockGuardId>;

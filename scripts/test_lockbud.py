@@ -5,11 +5,13 @@ One-click test script for Lockbud-ULLBC.
 Usage:
     python3 scripts/test_lockbud.py           # Run deadlock toy benchmarks
     python3 scripts/test_lockbud.py --condvar # Also run condvar smoke tests
+    python3 scripts/test_lockbud.py --channel # Also run channel toy benchmarks
+    python3 scripts/test_lockbud.py --all     # Run all tests
     python3 scripts/test_lockbud.py --help    # Show this message
 
 Environment:
     LOCKBUD_DIR   Path to original lockbud repo (default: ~/lockbud)
-    OBOL_DIR      Path to obol repo (default: ~/obol)
+    OBOL_DIR      Path to obol repo (default: auto-detected from script location)
 """
 
 import argparse
@@ -27,9 +29,15 @@ _AUTO_OBOL_DIR = _SCRIPT_DIR.parent
 LOCKBUD_DIR = Path(os.environ.get("LOCKBUD_DIR", Path.home() / "lockbud"))
 OBOL_DIR = Path(os.environ.get("OBOL_DIR", _AUTO_OBOL_DIR))
 TOOLCHAIN = "nightly-2026-02-07"
-TOYS_DIR = LOCKBUD_DIR / "toys"
+
+# Prefer toys in OBOL_DIR, fall back to LOCKBUD_DIR
+_TOYS_DIR_OBOL = OBOL_DIR / "toys"
+_TOYS_DIR_LOCKBUD = LOCKBUD_DIR / "toys"
+TOYS_DIR = _TOYS_DIR_OBOL if _TOYS_DIR_OBOL.exists() else _TOYS_DIR_LOCKBUD
 
 _LOCKBUD_BIN = OBOL_DIR / "target" / "debug" / "lockbud"
+_ORIGINAL_LOCKBUD_BIN = LOCKBUD_DIR / "target" / "debug" / "lockbud"
+_HAS_ORIGINAL = _ORIGINAL_LOCKBUD_BIN.exists() and TOYS_DIR == _TOYS_DIR_LOCKBUD
 
 
 def _ensure_lockbud_bin():
@@ -56,6 +64,7 @@ def _run_lockbud(cwd: Path, report_path: Path, kind: str, env: dict):
                 print(f"    {line}")
     return result
 
+
 DEADLOCK_TOYS = [
     "inter",
     "intra",
@@ -64,6 +73,8 @@ DEADLOCK_TOYS = [
     "call-no-deadlock",
     "recursive-no-deadlock",
     "wait-lock-no-deadlock",
+    "rwlock-read-write",
+    "parking-lot-deadlock",
 ]
 
 
@@ -119,8 +130,13 @@ def run_ullbc(toy_dir: Path):
 
 
 def run_deadlock_benchmarks():
-    print(f"{'Toy':<25} {'Orig DL':>8} {'Orig CL':>8} {'ULLBC DL':>8} {'ULLBC CL':>8} {'Match':>6}")
-    print("-" * 70)
+    if _HAS_ORIGINAL:
+        print(f"{'Toy':<25} {'Orig DL':>8} {'Orig CL':>8} {'ULLBC DL':>8} {'ULLBC CL':>8} {'Match':>6}")
+        print("-" * 70)
+    else:
+        print(f"{'Toy':<25} {'ULLBC DL':>8} {'ULLBC CL':>8}")
+        print("-" * 50)
+
     all_match = True
     for toy in DEADLOCK_TOYS:
         toy_dir = TOYS_DIR / toy
@@ -128,27 +144,19 @@ def run_deadlock_benchmarks():
             print(f"{toy:<25} MISSING")
             all_match = False
             continue
-        odl, ocl = run_original(toy_dir)
+
         udl, ucl = run_ullbc(toy_dir)
-        match = "YES" if (odl == udl and ocl == ucl) else "NO"
-        if match == "NO":
-            all_match = False
-        print(f"{toy:<25} {odl:>8} {ocl:>8} {udl:>8} {ucl:>8} {match:>6}")
+
+        if _HAS_ORIGINAL:
+            odl, ocl = run_original(toy_dir)
+            match = "YES" if (odl == udl and ocl == ucl) else "NO"
+            if match == "NO":
+                all_match = False
+            print(f"{toy:<25} {odl:>8} {ocl:>8} {udl:>8} {ucl:>8} {match:>6}")
+        else:
+            print(f"{toy:<25} {udl:>8} {ucl:>8}")
     print()
     return all_match
-
-
-def _setup_crate(tmp: str, name: str, cargo_toml: str, main_rs: str) -> Path:
-    crate_dir = Path(tmp) / name
-    crate_dir.mkdir()
-    (crate_dir / "Cargo.toml").write_text(cargo_toml)
-    src_dir = crate_dir / "src"
-    src_dir.mkdir()
-    (src_dir / "main.rs").write_text(main_rs)
-    (crate_dir / "rust-toolchain.toml").write_text(
-        (OBOL_DIR / "rust-toolchain.toml").read_text()
-    )
-    return crate_dir
 
 
 def run_condvar_smoke_tests():
@@ -340,49 +348,107 @@ fn main() {
     return failed == 0
 
 
-def run_additional_smoke_tests():
+def run_channel_benchmarks():
     _ensure_lockbud_bin()
     passed = 0
     failed = 0
 
-    # ---- Atomicity Violation test ----
-    with tempfile.TemporaryDirectory() as tmp:
-        crate_dir = _setup_crate(
-            tmp, "atomic_test",
-            '[package]\nname = "atomic_test"\nversion = "0.1.0"\nedition = "2021"\n',
-            '''
-use std::sync::atomic::{AtomicUsize, Ordering};
-fn check_and_set(atomic: &AtomicUsize) {
-    let v = atomic.load(Ordering::Relaxed);
-    if v == 0 {
-        atomic.store(1, Ordering::Relaxed);
-    }
-}
-fn main() {
-    let a = AtomicUsize::new(0);
-    check_and_set(&a);
-}
-'''
-        )
+    for toy in ["channel-deadlock", "channel-orphan"]:
+        toy_dir = TOYS_DIR / toy
+        if not toy_dir.exists():
+            print(f"[SKIP] {toy} -> toy directory not found")
+            continue
+
         env = os.environ.copy()
         env["RUST_LOG"] = "warn"
         env.pop("LD_LIBRARY_PATH", None)
-        report_path = crate_dir / "report.json"
+        subprocess.run(
+            ["cargo", "clean"],
+            cwd=toy_dir, env=env, capture_output=True,
+        )
+        obol_toolchain = (OBOL_DIR / "rust-toolchain.toml").read_text()
+        toolchain_path = toy_dir / "rust-toolchain.toml"
+        toolchain_path.write_text(obol_toolchain)
+        report_path = toy_dir / f"{toy}.lockbud.json"
         report_path.unlink(missing_ok=True)
-        _run_lockbud(crate_dir, report_path, "atomicity_violation", env)
+        try:
+            _run_lockbud(toy_dir, report_path, "channel", env)
+        finally:
+            toolchain_path.unlink(missing_ok=True)
+
+        has_bug = False
+        expected_kind = "ChannelDeadlock" if toy == "channel-deadlock" else "OrphanSender"
+        if report_path.exists():
+            try:
+                with open(report_path) as f:
+                    data = json.load(f)
+                has_bug = any(r.get("bug_kind") == expected_kind for r in data)
+            except Exception:
+                pass
+
+        if has_bug:
+            print(f"[PASS] {toy} -> {expected_kind} reported")
+            passed += 1
+        else:
+            print(f"[FAIL] {toy} -> expected {expected_kind}")
+            failed += 1
+
+    print(f"\nChannel toy tests: {passed} passed, {failed} failed\n")
+    return failed == 0
+
+
+def run_atomic_benchmarks():
+    _ensure_lockbud_bin()
+    passed = 0
+    failed = 0
+
+    for toy in ["atomic-violation", "atomic-violation-inter"]:
+        toy_dir = TOYS_DIR / toy
+        if not toy_dir.exists():
+            print(f"[SKIP] {toy} -> toy directory not found")
+            continue
+
+        env = os.environ.copy()
+        env["RUST_LOG"] = "warn"
+        env.pop("LD_LIBRARY_PATH", None)
+        subprocess.run(
+            ["cargo", "clean"],
+            cwd=toy_dir, env=env, capture_output=True,
+        )
+        obol_toolchain = (OBOL_DIR / "rust-toolchain.toml").read_text()
+        toolchain_path = toy_dir / "rust-toolchain.toml"
+        toolchain_path.write_text(obol_toolchain)
+        report_path = toy_dir / f"{toy}.lockbud.json"
+        report_path.unlink(missing_ok=True)
+        try:
+            _run_lockbud(toy_dir, report_path, "atomicity_violation", env)
+        finally:
+            toolchain_path.unlink(missing_ok=True)
 
         has_av = False
         if report_path.exists():
-            with open(report_path) as f:
-                data = json.load(f)
-            has_av = any(r.get("bug_kind") == "AtomicityViolation" for r in data)
+            try:
+                with open(report_path) as f:
+                    data = json.load(f)
+                has_av = any(r.get("bug_kind") == "AtomicityViolation" for r in data)
+            except Exception:
+                pass
 
         if has_av:
-            print("[PASS] AtomicityViolation (load-store dep) -> reported")
+            print(f"[PASS] {toy} -> AtomicityViolation reported")
             passed += 1
         else:
-            print("[FAIL] AtomicityViolation (load-store dep) -> expected report")
+            print(f"[FAIL] {toy} -> expected AtomicityViolation")
             failed += 1
+
+    print(f"\nAtomic toy tests: {passed} passed, {failed} failed\n")
+    return failed == 0
+
+
+def run_additional_smoke_tests():
+    _ensure_lockbud_bin()
+    passed = 0
+    failed = 0
 
     # ---- InvalidFree test ----
     with tempfile.TemporaryDirectory() as tmp:
@@ -498,6 +564,19 @@ fn main() {
     return failed == 0
 
 
+def _setup_crate(tmp: str, name: str, cargo_toml: str, main_rs: str) -> Path:
+    crate_dir = Path(tmp) / name
+    crate_dir.mkdir()
+    (crate_dir / "Cargo.toml").write_text(cargo_toml)
+    src_dir = crate_dir / "src"
+    src_dir.mkdir()
+    (src_dir / "main.rs").write_text(main_rs)
+    (crate_dir / "rust-toolchain.toml").write_text(
+        (OBOL_DIR / "rust-toolchain.toml").read_text()
+    )
+    return crate_dir
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="One-click test script for Lockbud-ULLBC",
@@ -509,9 +588,14 @@ def main():
         help="Also run Condvar smoke tests (requires parking_lot crate)",
     )
     parser.add_argument(
+        "--channel",
+        action="store_true",
+        help="Also run Channel toy benchmarks",
+    )
+    parser.add_argument(
         "--all",
         action="store_true",
-        help="Run all smoke tests (condvar, atomic, memory, panic)",
+        help="Run all tests (deadlock, condvar, channel, atomic, memory, panic)",
     )
     args = parser.parse_args()
 
@@ -527,7 +611,18 @@ def main():
         print("=" * 70)
         ok = run_condvar_smoke_tests() and ok
 
+    if args.channel or args.all:
+        print("=" * 70)
+        print("Lockbud-ULLBC Channel Toy Benchmarks")
+        print("=" * 70)
+        ok = run_channel_benchmarks() and ok
+
     if args.all:
+        print("=" * 70)
+        print("Lockbud-ULLBC Atomic Toy Benchmarks")
+        print("=" * 70)
+        ok = run_atomic_benchmarks() and ok
+
         print("=" * 70)
         print("Lockbud-ULLBC Additional Smoke Tests")
         print("=" * 70)

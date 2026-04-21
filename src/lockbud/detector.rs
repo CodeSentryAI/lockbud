@@ -47,7 +47,7 @@ impl<'a> DeadlockDetector<'a> {
             FxHashMap::default();
 
         // Phase 1: Detect doublelock.
-        for (a, b) in &self.analyzer.relations {
+        for (a, b) in self.analyzer.relations() {
             // Skip relations involving std library internals.
             if !self.is_user_guard(a) || !self.is_user_guard(b) {
                 continue;
@@ -461,10 +461,10 @@ impl<'a> DeadlockDetector<'a> {
             .unwrap_or_default();
 
         // Union with the propagated function entry contexts.
-        if let Some(ctx) = self.analyzer.contexts.get(&wait_fun) {
+        if let Some(ctx) = self.analyzer.contexts().get(&wait_fun) {
             live1.union(ctx);
         }
-        if let Some(ctx) = self.analyzer.contexts.get(&notify_fun) {
+        if let Some(ctx) = self.analyzer.contexts().get(&notify_fun) {
             live2.union(ctx);
         }
 

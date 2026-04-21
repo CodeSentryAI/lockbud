@@ -16,3 +16,5 @@
 **/target
 
 /results
+
+**/*.lockbud.json

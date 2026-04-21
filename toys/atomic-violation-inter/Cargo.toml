@@ -1,0 +1,4 @@
+[package]
+name = "atomic-violation-inter"
+version = "0.1.0"
+edition = "2021"

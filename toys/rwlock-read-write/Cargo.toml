@@ -1,0 +1,4 @@
+[package]
+name = "rwlock-read-write"
+version = "0.1.0"
+edition = "2021"
