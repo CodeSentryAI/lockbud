@@ -293,8 +293,12 @@ pub fn detect_atomicity_violations(
             let write_fn_decl = krate.fun_decls.get(*write_fun);
             let fn_name = format!(
                 "{} -> {}",
-                read_fn_decl.map(|d| format_name(&d.item_meta.name)).unwrap_or_default(),
-                write_fn_decl.map(|d| format_name(&d.item_meta.name)).unwrap_or_default()
+                read_fn_decl
+                    .map(|d| format_name(&d.item_meta.name))
+                    .unwrap_or_default(),
+                write_fn_decl
+                    .map(|d| format_name(&d.item_meta.name))
+                    .unwrap_or_default()
             );
             let read_span = read_fn_decl
                 .and_then(|d| {
@@ -372,7 +376,9 @@ fn build_def_use(body: &ullbc_ast::ExprBody) -> FxHashMap<LocalId, Vec<Location>
 }
 
 /// Simple dominance information: block -> set of blocks that dominate it.
-fn build_dominance(body: &ullbc_ast::ExprBody) -> FxHashMap<ullbc_ast::BlockId, FxHashSet<ullbc_ast::BlockId>> {
+fn build_dominance(
+    body: &ullbc_ast::ExprBody,
+) -> FxHashMap<ullbc_ast::BlockId, FxHashSet<ullbc_ast::BlockId>> {
     let mut dom = FxHashMap::default();
     let all_blocks: FxHashSet<_> = body.body.iter_indexed().map(|(id, _)| id).collect();
     for (id, _) in body.body.iter_indexed() {
@@ -415,7 +421,9 @@ fn build_dominance(body: &ullbc_ast::ExprBody) -> FxHashMap<ullbc_ast::BlockId, 
     dom
 }
 
-fn build_predecessors(body: &ullbc_ast::ExprBody) -> FxHashMap<ullbc_ast::BlockId, Vec<ullbc_ast::BlockId>> {
+fn build_predecessors(
+    body: &ullbc_ast::ExprBody,
+) -> FxHashMap<ullbc_ast::BlockId, Vec<ullbc_ast::BlockId>> {
     let mut preds: FxHashMap<ullbc_ast::BlockId, Vec<ullbc_ast::BlockId>> = FxHashMap::default();
     for (block_id, block) in body.body.iter_indexed() {
         for succ in terminator_successors(&block.terminator.kind) {
@@ -437,9 +445,15 @@ fn terminator_successors(term: &ullbc_ast::TerminatorKind) -> Vec<&ullbc_ast::Bl
                 v
             }
         },
-        Call { target, on_unwind, .. } => vec![target, on_unwind],
-        Drop { target, on_unwind, .. } => vec![target, on_unwind],
-        Assert { target, on_unwind, .. } => vec![target, on_unwind],
+        Call {
+            target, on_unwind, ..
+        } => vec![target, on_unwind],
+        Drop {
+            target, on_unwind, ..
+        } => vec![target, on_unwind],
+        Assert {
+            target, on_unwind, ..
+        } => vec![target, on_unwind],
         Return | Abort(_) | UnwindResume => vec![],
     }
 }
